@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.supershade.haptics.LocalSuperHaptics
 import com.supershade.haptics.SuperHaptics
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -78,7 +79,7 @@ fun FluidSwipeToDismiss(
     val context = LocalContext.current
     val haptics: SuperHaptics = LocalSuperHaptics.current ?: remember(context) { SuperHaptics(context) }
     val density = LocalDensity.current
-    val flingVelocityPx = with(density) { 900.dp.toPx() }
+    val flingVelocityPx = with(density) { 420.dp.toPx() }
     val currentOnDismissed by rememberUpdatedState(onDismissed)
     val allowStart by rememberUpdatedState(enableStartToEnd)
     val allowEnd by rememberUpdatedState(enableEndToStart)
@@ -110,6 +111,7 @@ fun FluidSwipeToDismiss(
                 }
                 .draggable(
                     orientation = Orientation.Horizontal,
+                    enabled = allowStart || allowEnd,
                     state = draggableState,
                     onDragStopped = { velocity ->
                         val o = state.offset.value
@@ -124,6 +126,7 @@ fun FluidSwipeToDismiss(
                                 initialVelocity = velocity,
                             )
                             currentOnDismissed(dir > 0f)
+                            delay(180L)
                             // If the item survives (e.g. dismissal rejected), glide back.
                             state.offset.animateTo(0f, spring(0.8f, 300f))
                         } else {

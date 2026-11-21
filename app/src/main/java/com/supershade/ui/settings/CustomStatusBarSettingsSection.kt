@@ -85,6 +85,8 @@ fun CustomStatusBarSettingsSection(
     onRequestShizukuPermission: () -> Unit,
     onOpenShizukuManager: () -> Unit,
     onRequestTelemetryPermissions: () -> Unit,
+    notificationAccessGranted: Boolean = true,
+    onOpenNotificationAccess: () -> Unit = {},
 ) {
     val haptics = LocalSuperHaptics.current
     val shizukuOk = shizukuConnected && shizukuPermGranted
@@ -448,6 +450,7 @@ fun CustomStatusBarSettingsSection(
             // ===================================================================
             var expandIcons by remember { mutableStateOf(false) }
             val enabledIconCount = listOf(
+                config.showNotificationIcons,
                 config.showWifiIcon,
                 config.showMobileSignal,
                 config.showNetworkType,
@@ -462,11 +465,61 @@ fun CustomStatusBarSettingsSection(
             CustomizationGroupCard(
                 icon = Icons.Rounded.Wifi,
                 title = "3. Network & System Icons",
-                summary = "$enabledIconCount of 9 indicators enabled",
+                summary = "$enabledIconCount of 10 indicators enabled",
                 expanded = expandIcons,
                 onToggleExpand = { expandIcons = !expandIcons },
                 tag = "csb_group_icons",
             ) {
+                SettingToggleRow(
+                    title = "Notification App Icons",
+                    subtitle = "Show monochrome app icons beside the clock for active notifications",
+                    checked = config.showNotificationIcons,
+                    onCheckedChange = { v -> onUpdateConfig { it.copy(showNotificationIcons = v) } },
+                    testTag = "csb_notif_icons_toggle",
+                )
+                if (config.showNotificationIcons) {
+                    ChipSelectorRow(
+                        label = "Max Notification Icons",
+                        options = (1..6).map { it to "$it" },
+                        selected = config.maxNotificationIcons.coerceIn(1, 6),
+                        subtitle = "Shows up to ${config.maxNotificationIcons.coerceIn(1, 6)} app icons, plus a dot indicator when more notifications exist",
+                        onSelect = { count -> onUpdateConfig { it.copy(maxNotificationIcons = count) } },
+                    )
+                    SettingToggleRow(
+                        title = "Include Silent Notifications",
+                        subtitle = "Show low-priority and silent notification app icons in the status bar",
+                        checked = config.includeSilentNotifications,
+                        onCheckedChange = { v -> onUpdateConfig { it.copy(includeSilentNotifications = v) } },
+                        testTag = "csb_include_silent_notifs_toggle",
+                    )
+                    if (!notificationAccessGranted) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    text = "Grant Notification Access to display live notification icons.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                )
+                                FilledTonalButton(onClick = onOpenNotificationAccess) {
+                                    Text("Allow")
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
                 SettingToggleRow(
                     title = "Wi-Fi Signal",
                     subtitle = "3-arc iOS Wi-Fi strength indicator",
@@ -779,6 +832,7 @@ private fun SettingToggleRow(
     subtitle: String,
     checked: Boolean,
     enabled: Boolean = true,
+    testTag: String? = null,
     onCheckedChange: (Boolean) -> Unit,
 ) {
     val haptics = LocalSuperHaptics.current
@@ -791,6 +845,7 @@ private fun SettingToggleRow(
                 if (next) haptics?.tileToggleOn() else haptics?.tileToggleOff()
                 onCheckedChange(next)
             }
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
             .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,

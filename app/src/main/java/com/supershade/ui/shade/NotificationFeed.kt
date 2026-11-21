@@ -685,6 +685,7 @@ fun NotificationFeed(
     onDismiss: (String) -> Unit,
     onClearAll: () -> Unit,
     modifier: Modifier = Modifier,
+    onDismissGroup: (List<String>) -> Unit = { keys -> keys.forEach(onDismiss) },
     onNotificationClick: (ShadeNotification) -> Unit = {},
     onSnooze: (String, Long) -> Unit = { _, _ -> },
     onHideChannel: (pkg: String, channelId: String) -> Unit = { _, _ -> },
@@ -792,7 +793,7 @@ fun NotificationFeed(
                                 onClick = {
                                     haptics.sheetDetent()
                                     if (searchQuery.isNotBlank()) {
-                                        clearableFiltered.forEach { onDismiss(it.key) }
+                                        onDismissGroup(clearableFiltered.map { it.key })
                                     } else {
                                         onClearAll()
                                     }
@@ -840,7 +841,9 @@ fun NotificationFeed(
                     if (group.isStacked) {
                         GroupedNotificationCard(
                             group = group,
-                            onDismissGroup = { group.notifications.forEach { onDismiss(it.key) } },
+                            onDismissGroup = {
+                                onDismissGroup(group.notifications.filter { it.isClearable }.map { it.key })
+                            },
                             onDismiss = onDismiss,
                             onNotificationClick = onNotificationClick,
                             onSnooze = onSnooze,
@@ -885,6 +888,7 @@ fun TogetherNotificationFeed(
     onDismiss: (String) -> Unit,
     onClearAll: () -> Unit,
     modifier: Modifier = Modifier,
+    onDismissGroup: (List<String>) -> Unit = { keys -> keys.forEach(onDismiss) },
     onNotificationClick: (ShadeNotification) -> Unit = {},
     onSnooze: (String, Long) -> Unit = { _, _ -> },
     onHideChannel: (pkg: String, channelId: String) -> Unit = { _, _ -> },
@@ -999,7 +1003,7 @@ fun TogetherNotificationFeed(
                             onClick = {
                                 haptics.sheetDetent()
                                 if (searchQuery.isNotBlank()) {
-                                    clearableFiltered.forEach { onDismiss(it.key) }
+                                    onDismissGroup(clearableFiltered.map { it.key })
                                 } else {
                                     onClearAll()
                                 }
@@ -1039,7 +1043,9 @@ fun TogetherNotificationFeed(
                     if (group.isStacked) {
                         GroupedNotificationCard(
                             group = group,
-                            onDismissGroup = { group.notifications.forEach { onDismiss(it.key) } },
+                            onDismissGroup = {
+                                onDismissGroup(group.notifications.filter { it.isClearable }.map { it.key })
+                            },
                             onDismiss = onDismiss,
                             onNotificationClick = onNotificationClick,
                             onSnooze = onSnooze,

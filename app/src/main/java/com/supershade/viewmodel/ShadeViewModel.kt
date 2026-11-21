@@ -11,6 +11,7 @@ import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.supershade.domain.brightness.BrightnessRepository
+import com.supershade.domain.connectivity.ConnectivityRepository
 import com.supershade.domain.media.MediaRepository
 import com.supershade.domain.media.MediaState
 import com.supershade.domain.notification.NotificationRepository
@@ -29,8 +30,11 @@ import com.supershade.settings.ShadeSettings
 import com.supershade.shizuku.StatusBarGovernor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
@@ -38,6 +42,11 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+sealed class ShadeTransitionEvent {
+    data class FinishOpen(val progress: Float, val velocity: Float) : ShadeTransitionEvent()
+    data class FinishClose(val progress: Float, val velocity: Float) : ShadeTransitionEvent()
+}
 
 class ShadeViewModel(
     private val context: Context,
@@ -50,15 +59,33 @@ class ShadeViewModel(
     private val governor: StatusBarGovernor,
     private val audioRepo: com.supershade.domain.audio.AudioRepository? = null,
     private val systemStatusRepo: com.supershade.domain.system.SystemStatusRepository? = null,
+    connectivityRepo: ConnectivityRepository? = null,
 ) : ViewModel() {
+
+    private val connectivity: ConnectivityRepository =
+        connectivityRepo ?: ConnectivityRepository(context, governor)
 
     private val _state = MutableStateFlow(ShadeState())
     val state: StateFlow<ShadeState> = _state.asStateFlow()
 
+    private val _gestureProgress = MutableStateFlow(0f)
+    val gestureProgress: StateFlow<Float> = _gestureProgress.asStateFlow()
+
+    private val _isGestureDragging = MutableStateFlow(false)
+    val isGestureDragging: StateFlow<Boolean> = _isGestureDragging.asStateFlow()
+
+    private val _transitionEvent = MutableSharedFlow<ShadeTransitionEvent>(extraBufferCapacity = 8)
+    val transitionEvent: SharedFlow<ShadeTransitionEvent> = _transitionEvent.asSharedFlow()
+
     private var positionTickerJob: Job? = null
     private var brightnessJob: Job? = null
+    private var connectivityRefreshJob: Job? = null
 
     init {
+        tileToggler.onExternalActivityLaunched = {
+            closeTileDetail()
+            requestAnimatedClose()
+        }
         brightnessRepo.brightness
             .onEach { b -> _state.update { it.copy(brightness = b) } }
             .launchIn(viewModelScope)
@@ -285,7 +312,9 @@ class ShadeViewModel(
         }
     }
 
-    fun open(expandQs: Boolean = false) {
+    fun beginInteractiveOpen(expandQs: Boolean = false) {
+        _isGestureDragging.value = true
+        _gestureProgress.value = 0.025f
         _state.update {
             it.copy(
                 isOpen = true,
@@ -294,10 +323,61 @@ class ShadeViewModel(
                 brightness = brightnessRepo.getCurrent(),
             )
         }
-        mediaRepo.refresh()
-        tileRepo.reload()
-        notificationRepo.refresh()
+        viewModelScope.launch {
+            mediaRepo.refresh()
+            tileRepo.reload()
+            notificationRepo.refresh()
+        }
+    }
+
+    fun updateInteractiveOpen(progress: Float) {
+        _gestureProgress.value = progress.coerceIn(0f, 1.06f)
+    }
+
+    fun endInteractiveOpen(
+        shouldOpen: Boolean,
+        progress: Float,
+        progressVelocity: Float,
+    ) {
+        val clamped = progress.coerceIn(0f, 1.06f)
+        _isGestureDragging.value = false
+        _gestureProgress.value = clamped
+        if (shouldOpen) {
+            _transitionEvent.tryEmit(ShadeTransitionEvent.FinishOpen(clamped, progressVelocity))
+            updatePositionTicker(_state.value.media)
+        } else {
+            _transitionEvent.tryEmit(ShadeTransitionEvent.FinishClose(clamped, progressVelocity))
+        }
+    }
+
+    fun open(expandQs: Boolean = false) {
+        _isGestureDragging.value = false
+        _gestureProgress.value = 0f
+        _state.update {
+            it.copy(
+                isOpen = true,
+                isQsExpanded = expandQs,
+                activePanel = if (expandQs) ShadePanel.QUICK_SETTINGS else ShadePanel.NOTIFICATIONS,
+                brightness = brightnessRepo.getCurrent(),
+            )
+        }
+        _transitionEvent.tryEmit(ShadeTransitionEvent.FinishOpen(0f, 0f))
+        viewModelScope.launch {
+            mediaRepo.refresh()
+            tileRepo.reload()
+            notificationRepo.refresh()
+        }
         updatePositionTicker(_state.value.media)
+    }
+
+    fun requestAnimatedClose() {
+        _isGestureDragging.value = false
+        val startP = _gestureProgress.value.takeIf { it > 0.01f } ?: 1f
+        _transitionEvent.tryEmit(ShadeTransitionEvent.FinishClose(startP, -2.5f))
+    }
+
+    fun completeClose() {
+        close()
     }
 
     fun setQsExpanded(expanded: Boolean) {
@@ -319,7 +399,11 @@ class ShadeViewModel(
     }
 
     fun close() {
-        _state.update { it.copy(isOpen = false, isQsExpanded = false) }
+        connectivity.stopNearbyScan()
+        connectivityRefreshJob?.cancel()
+        _isGestureDragging.value = false
+        _gestureProgress.value = 0f
+        _state.update { it.copy(isOpen = false, isQsExpanded = false, activeTileDetail = null) }
         positionTickerJob?.cancel()
         positionTickerJob = null
         brightnessJob?.cancel()
@@ -330,7 +414,12 @@ class ShadeViewModel(
         _state.update { current ->
             current.copy(
                 selectedCategory = category,
-                visibleNotifications = filterFor(current.allNotifications, category, current.hiddenChannels)
+                visibleNotifications = filterFor(
+                    current.allNotifications,
+                    category,
+                    current.hiddenChannels,
+                    current.hideOngoingNotifications,
+                )
             )
         }
     }
@@ -429,7 +518,10 @@ class ShadeViewModel(
             id.contains("wifi") || id.contains("internet") -> {
                 val wm = context.getSystemService(WifiManager::class.java)
                 val cm = context.getSystemService(ConnectivityManager::class.java)
-                val info = try { wm?.connectionInfo } catch (_: Exception) { null }
+                val info = try {
+                    @Suppress("DEPRECATION")
+                    wm?.connectionInfo
+                } catch (_: Exception) { null }
                 val rawSsid = info?.ssid?.trim('"')
                 val ssid = if (rawSsid == "<unknown ssid>" || rawSsid.isNullOrBlank()) {
                     if (tile.isActive) "Connected Wi-Fi" else "Wi-Fi Disconnected"
@@ -462,10 +554,12 @@ class ShadeViewModel(
                             wifiIp = ip,
                             wifiLinkSpeed = speed,
                             wifiRssi = rssi,
+                            wifiIsScanning = tile.isActive,
                             settingsAction = tile.settingsAction ?: Settings.ACTION_WIFI_SETTINGS,
                         )
                     )
                 }
+                refreshWifiNetworks(triggerScan = true)
             }
             id.contains("bt") || id.contains("bluetooth") -> {
                 val am = context.getSystemService(AudioManager::class.java)
@@ -491,10 +585,12 @@ class ShadeViewModel(
                             isActive = tile.isActive,
                             btDeviceName = deviceName,
                             btAudioConnected = audioDevice != null,
+                            btIsScanning = tile.isActive,
                             settingsAction = tile.settingsAction ?: Settings.ACTION_BLUETOOTH_SETTINGS,
                         )
                     )
                 }
+                refreshBluetoothDevices(scanNearby = false)
             }
             id.contains("mute") || id.contains("sound") || id.contains("volume") -> {
                 openSoundModeDetail()
@@ -675,7 +771,244 @@ class ShadeViewModel(
     }
 
     fun closeTileDetail() {
+        connectivity.stopNearbyScan()
+        connectivityRefreshJob?.cancel()
         _state.update { it.copy(activeTileDetail = null) }
+    }
+
+    fun refreshWifiNetworks(triggerScan: Boolean = true) {
+        connectivityRefreshJob?.cancel()
+        connectivityRefreshJob = viewModelScope.launch {
+            _state.update { current ->
+                val detail = current.activeTileDetail ?: return@update current
+                if (detail.type != TileDetailType.WIFI) return@update current
+                current.copy(activeTileDetail = detail.copy(wifiIsScanning = true))
+            }
+            val snap = connectivity.loadWifiSnapshot(triggerScan = triggerScan)
+            _state.update { current ->
+                val detail = current.activeTileDetail ?: return@update current
+                if (detail.type != TileDetailType.WIFI) return@update current
+                current.copy(
+                    activeTileDetail = detail.copy(
+                        isActive = snap.isEnabled,
+                        subtitle = if (snap.isEnabled) (snap.currentSsid ?: "On") else "Off",
+                        wifiSsid = snap.currentSsid ?: if (snap.isEnabled) "Wi-Fi Enabled" else "Wi-Fi Off",
+                        wifiBand = snap.band,
+                        wifiIp = snap.ip,
+                        wifiLinkSpeed = snap.linkSpeed,
+                        wifiRssi = snap.rssi,
+                        wifiNetworks = snap.networks,
+                        wifiIsScanning = false,
+                        wifiNeedsLocationPermission = snap.needsPermission,
+                        wifiStatusMessage = snap.statusMessage,
+                    )
+                )
+            }
+        }
+    }
+
+    fun toggleWifiInDetail() {
+        val detail = _state.value.activeTileDetail ?: return
+        if (detail.type != TileDetailType.WIFI) return
+        val newActive = !detail.isActive
+        viewModelScope.launch {
+            val res = connectivity.toggleWifi(newActive)
+            if (res.launchedExternalPanel) {
+                closeTileDetail()
+                requestAnimatedClose()
+            } else {
+                _state.update { current ->
+                    val d = current.activeTileDetail ?: return@update current
+                    current.copy(
+                        activeTileDetail = d.copy(
+                            isActive = newActive,
+                            subtitle = if (newActive) d.wifiSsid else "Off",
+                            wifiStatusMessage = res.message,
+                        )
+                    )
+                }
+                delay(400L)
+                tileRepo.refreshActiveStates()
+                refreshWifiNetworks(triggerScan = newActive)
+            }
+        }
+    }
+
+    fun connectWifiInDetail(network: WifiNetworkItem, passphrase: String? = null) {
+        viewModelScope.launch {
+            _state.update { current ->
+                val detail = current.activeTileDetail ?: return@update current
+                if (detail.type != TileDetailType.WIFI) return@update current
+                current.copy(
+                    activeTileDetail = detail.copy(
+                        wifiIsScanning = true,
+                        wifiStatusMessage = "Connecting to ${network.ssid}...",
+                    )
+                )
+            }
+            val res = connectivity.connectToWifi(
+                ssid = network.ssid,
+                passphrase = passphrase,
+                isOpen = !network.isSecured,
+                securityLabel = network.security,
+                isSaved = network.isSaved,
+            )
+            if (res.launchedExternalPanel) {
+                closeTileDetail()
+                requestAnimatedClose()
+            } else {
+                _state.update { current ->
+                    val detail = current.activeTileDetail ?: return@update current
+                    if (detail.type != TileDetailType.WIFI) return@update current
+                    current.copy(
+                        activeTileDetail = detail.copy(
+                            wifiIsScanning = false,
+                            wifiStatusMessage = res.message,
+                        )
+                    )
+                }
+                delay(1200L)
+                tileRepo.refreshActiveStates()
+                refreshWifiNetworks(triggerScan = false)
+            }
+        }
+    }
+
+    fun openWifiPanelFromDetail() {
+        if (connectivity.launchWifiPanel()) {
+            closeTileDetail()
+            requestAnimatedClose()
+        }
+    }
+
+    fun openWifiPermissionsFromDetail() {
+        if (connectivity.openAppPermissionsSettings()) {
+            closeTileDetail()
+            requestAnimatedClose()
+        }
+    }
+
+    fun refreshBluetoothDevices(scanNearby: Boolean = false) {
+        connectivityRefreshJob?.cancel()
+        connectivityRefreshJob = viewModelScope.launch {
+            _state.update { current ->
+                val detail = current.activeTileDetail ?: return@update current
+                if (detail.type != TileDetailType.BLUETOOTH) return@update current
+                current.copy(activeTileDetail = detail.copy(btIsScanning = true))
+            }
+            val snap = connectivity.loadBluetoothSnapshot()
+            _state.update { current ->
+                val detail = current.activeTileDetail ?: return@update current
+                if (detail.type != TileDetailType.BLUETOOTH) return@update current
+                current.copy(
+                    activeTileDetail = detail.copy(
+                        isActive = snap.isEnabled,
+                        subtitle = if (snap.isEnabled) (snap.activeDeviceName ?: "On") else "Off",
+                        btDeviceName = snap.activeDeviceName ?: if (snap.isEnabled) "Bluetooth On" else "Bluetooth Off",
+                        btAudioConnected = snap.isAudioConnected,
+                        btDevices = snap.pairedDevices,
+                        btIsScanning = scanNearby && snap.isEnabled,
+                        btNeedsPermission = snap.needsPermission,
+                        btStatusMessage = snap.statusMessage,
+                    )
+                )
+            }
+            if (scanNearby && snap.isEnabled && !snap.needsPermission) {
+                val started = connectivity.startNearbyScan { nearby ->
+                    _state.update { current ->
+                        val detail = current.activeTileDetail ?: return@update current
+                        if (detail.type != TileDetailType.BLUETOOTH) return@update current
+                        current.copy(activeTileDetail = detail.copy(btNearbyDevices = nearby))
+                    }
+                }
+                if (started) {
+                    delay(8000L)
+                    connectivity.stopNearbyScan()
+                }
+                _state.update { current ->
+                    val detail = current.activeTileDetail ?: return@update current
+                    if (detail.type != TileDetailType.BLUETOOTH) return@update current
+                    current.copy(activeTileDetail = detail.copy(btIsScanning = false))
+                }
+            }
+        }
+    }
+
+    fun toggleBluetoothInDetail() {
+        val detail = _state.value.activeTileDetail ?: return
+        if (detail.type != TileDetailType.BLUETOOTH) return
+        val newActive = !detail.isActive
+        viewModelScope.launch {
+            val res = connectivity.toggleBluetooth(newActive)
+            if (res.launchedExternalPanel) {
+                closeTileDetail()
+                requestAnimatedClose()
+            } else {
+                _state.update { current ->
+                    val d = current.activeTileDetail ?: return@update current
+                    current.copy(
+                        activeTileDetail = d.copy(
+                            isActive = newActive,
+                            subtitle = if (newActive) "On" else "Off",
+                            btStatusMessage = res.message,
+                        )
+                    )
+                }
+                delay(450L)
+                tileRepo.refreshActiveStates()
+                refreshBluetoothDevices(scanNearby = false)
+            }
+        }
+    }
+
+    fun connectBluetoothDeviceInDetail(device: BluetoothDeviceItem) {
+        viewModelScope.launch {
+            _state.update { current ->
+                val detail = current.activeTileDetail ?: return@update current
+                if (detail.type != TileDetailType.BLUETOOTH) return@update current
+                current.copy(
+                    activeTileDetail = detail.copy(
+                        btStatusMessage = if (device.isConnected) "Disconnecting ${device.name}..."
+                        else "Connecting ${device.name}..."
+                    )
+                )
+            }
+            val res = connectivity.toggleDeviceConnection(device)
+            if (res.launchedExternalPanel) {
+                closeTileDetail()
+                requestAnimatedClose()
+            } else {
+                _state.update { current ->
+                    val detail = current.activeTileDetail ?: return@update current
+                    if (detail.type != TileDetailType.BLUETOOTH) return@update current
+                    current.copy(activeTileDetail = detail.copy(btStatusMessage = res.message))
+                }
+                delay(800L)
+                tileRepo.refreshActiveStates()
+                refreshBluetoothDevices(scanNearby = false)
+            }
+        }
+    }
+
+    fun openBluetoothPairFromDetail() {
+        if (connectivity.launchBluetoothPairScreen()) {
+            closeTileDetail()
+            requestAnimatedClose()
+        }
+    }
+
+    fun openMediaOutputFromDetail() {
+        if (connectivity.launchMediaOutputPanel() || connectivity.launchBluetoothSettings()) {
+            closeTileDetail()
+            requestAnimatedClose()
+        }
+    }
+
+    fun openBluetoothPermissionsFromDetail() {
+        if (connectivity.openAppPermissionsSettings()) {
+            closeTileDetail()
+            requestAnimatedClose()
+        }
     }
 
     fun setTorchStrength(level: Int) {
@@ -716,6 +1049,11 @@ class ShadeViewModel(
 
     fun dismissNotification(key: String) {
         notificationRepo.cancelAndRemove(key)
+    }
+
+    fun dismissNotifications(keys: List<String>) {
+        if (keys.isEmpty()) return
+        notificationRepo.cancelGroup(keys)
     }
 
     fun clearAllNotifications() {

@@ -258,17 +258,17 @@ class TileRepository(
     }
 
     private fun queryTileSubtitle(id: String): String? {
-        val key = id.lowercase()
+        val key = canonicalTileId(id).lowercase()
         return try {
             when {
-                key.contains("wifi") || key.contains("internet") -> {
-                    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                key == "wifi" || key == "internet" -> {
+                    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                     if (wm?.isWifiEnabled != true) return null
                     @Suppress("DEPRECATION")
                     val raw = wm.connectionInfo?.ssid?.trim('"')
                     if (!raw.isNullOrBlank() && raw != "<unknown ssid>") raw else "Connected"
                 }
-                key.contains("bt") || key.contains("bluetooth") -> {
+                key == "bt" -> {
                     val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
                     val adapter = bm?.adapter
                     if (adapter?.isEnabled != true) return null
@@ -284,7 +284,7 @@ class TileRepository(
                         if (!name.isNullOrBlank()) name else "On"
                     } catch (_: Exception) { "On" }
                 }
-                key.contains("mute") || key.contains("volume") || key.contains("sound") -> {
+                key == "mute" || key == "volume" -> {
                     val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
                     when (am?.ringerMode) {
                         android.media.AudioManager.RINGER_MODE_VIBRATE -> "Vibrate"
@@ -293,18 +293,16 @@ class TileRepository(
                         else -> null
                     }
                 }
-                key.contains("rotation") || key.contains("rotationlock") -> {
+                key == "rotation" -> {
                     val auto = Settings.System.getInt(context.contentResolver, Settings.System.ACCELEROMETER_ROTATION, 0) == 1
                     if (auto) "Auto rotate" else "Portrait"
                 }
-                key.contains("battery") || key.contains("batterymode") -> {
+                key == "battery" -> {
                     val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
                     if (pm?.isPowerSaveMode == true) "Power saving" else null
                 }
-                key.contains("flashlight") -> {
-                    if (torchEnabled) "On" else null
-                }
-                key.contains("hotspot") -> {
+                key == "flashlight" -> if (torchEnabled) "On" else null
+                key == "hotspot" -> {
                     val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                     val isAp = try {
                         val m = wm?.javaClass?.getDeclaredMethod("isWifiApEnabled")
@@ -313,7 +311,7 @@ class TileRepository(
                     } catch (_: Exception) { false }
                     if (isAp) "Active" else null
                 }
-                key.contains("dnd") -> {
+                key == "dnd" -> {
                     val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                     when (nm?.currentInterruptionFilter) {
                         NotificationManager.INTERRUPTION_FILTER_PRIORITY -> "Priority only"
@@ -322,14 +320,20 @@ class TileRepository(
                         else -> null
                     }
                 }
-                key.contains("alarm") -> {
+                key == "datasaver" -> {
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                    if (cm?.restrictBackgroundStatus == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED) {
+                        "Active"
+                    } else null
+                }
+                key == "alarm" -> {
                     val am = context.getSystemService(AlarmManager::class.java)
                     val next = am?.nextAlarmClock
                     if (next != null)
                         SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(next.triggerTime))
                     else null
                 }
-                key.contains("caffeinate") || key.contains("caffeine") -> {
+                key == "caffeinate" -> {
                     val timeout = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, 30000)
                     when {
                         timeout >= 1_800_000 -> "30m"
@@ -339,56 +343,64 @@ class TileRepository(
                         else                 -> "30s"
                     }
                 }
-                key.contains("powermenu") || key.contains("power_menu") -> "Power"
-                key.contains("screenshot") -> "Capture"
+                key == "quick_share" -> "Share nearby"
+                key == "powermenu" -> "Power"
+                key == "screenshot" -> "Capture"
                 else -> null
             }
         } catch (_: Exception) { null }
     }
 
     private fun queryTileActiveState(id: String): Boolean {
-        val key = id.lowercase()
+        val key = canonicalTileId(id).lowercase()
         return try {
             when {
-                key.contains("wifi") || key.contains("internet") -> {
+                key == "wifi" || key == "internet" -> {
                     val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                     wm?.isWifiEnabled == true
                 }
-                key.contains("bt") || key.contains("bluetooth") -> {
+                key == "bt" -> {
                     val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
                     bm?.adapter?.isEnabled == true
                 }
-                key.contains("dark") || key.contains("uimodenight") -> {
+                key == "dark" -> {
                     (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
                 }
-                key.contains("rotation") || key.contains("rotationlock") -> {
+                key == "night" -> {
+                    Settings.System.getInt(context.contentResolver, "blue_light_filter", 0) == 1 ||
+                        Settings.Secure.getInt(context.contentResolver, "night_display_activated", 0) == 1
+                }
+                key == "rotation" -> {
                     Settings.System.getInt(context.contentResolver, Settings.System.ACCELEROMETER_ROTATION, 0) == 1
                 }
-                key.contains("airplane") -> {
+                key == "airplane" -> {
                     Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
                 }
-                key.contains("location") -> {
+                key == "location" -> {
                     val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
                     lm?.isLocationEnabled == true
                 }
-                key.contains("nfc") -> {
+                key == "nfc" -> {
                     val nfc = NfcAdapter.getDefaultAdapter(context)
                     nfc?.isEnabled == true
                 }
-                key.contains("dnd") || key.contains("donotdisturb") -> {
+                key == "dnd" -> {
                     val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                     (nm?.currentInterruptionFilter ?: NotificationManager.INTERRUPTION_FILTER_ALL) != NotificationManager.INTERRUPTION_FILTER_ALL
                 }
-                key.contains("battery") || key.contains("batterymode") -> {
+                key == "battery" -> {
                     val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
                     pm?.isPowerSaveMode == true
                 }
-                key.contains("flashlight") -> torchEnabled
-                key.contains("cell") || key.contains("cellular") || key.contains("data") -> {
+                key == "protect_battery" -> {
+                    Settings.Global.getInt(context.contentResolver, "protect_battery", 0) == 1
+                }
+                key == "flashlight" -> torchEnabled
+                key == "cell" -> {
                     val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
                     try { tm?.isDataEnabled == true } catch (_: Exception) { false }
                 }
-                key.contains("hotspot") -> {
+                key == "hotspot" -> {
                     val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                     try {
                         val m = wm?.javaClass?.getDeclaredMethod("isWifiApEnabled")
@@ -396,31 +408,36 @@ class TileRepository(
                         (m?.invoke(wm) as? Boolean) == true
                     } catch (_: Exception) { false }
                 }
-                key.contains("mute") || key.contains("sound") -> {
+                key == "mute" -> {
                     val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
                     am?.ringerMode == android.media.AudioManager.RINGER_MODE_NORMAL
                 }
-                key.contains("sync") -> {
-                    android.content.ContentResolver.getMasterSyncAutomatically()
+                key == "sync" -> android.content.ContentResolver.getMasterSyncAutomatically()
+                key == "datasaver" -> {
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                    cm?.restrictBackgroundStatus == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
                 }
-                key.contains("reducebright") || key.contains("extradim") -> {
+                key == "extra_dim" -> {
                     Settings.Secure.getInt(context.contentResolver, "reduce_bright_colors_activated", 0) == 1
                 }
-                key.contains("bluelight") || key.contains("eyecomfort") -> {
-                    Settings.System.getInt(context.contentResolver, "blue_light_filter", 0) == 1 ||
-                    Settings.Secure.getInt(context.contentResolver, "night_display_activated", 0) == 1
-                }
-                key.contains("aod") || key.contains("alwayson") -> {
+                key == "aod" -> {
                     Settings.Secure.getInt(context.contentResolver, "aod_mode", 0) == 1 ||
-                    Settings.Secure.getInt(context.contentResolver, "doze_always_on", 0) == 1
+                        Settings.Secure.getInt(context.contentResolver, "doze_always_on", 0) == 1
                 }
-                key.contains("caffeinate") || key.contains("caffeine") -> {
+                key == "alarm" -> {
+                    val am = context.getSystemService(AlarmManager::class.java)
+                    am?.nextAlarmClock != null
+                }
+                key == "onehanded" -> {
+                    Settings.Secure.getInt(context.contentResolver, "one_handed_mode_enabled", 0) == 1
+                }
+                key == "caffeinate" -> {
                     val timeout = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, 30000)
                     timeout > 30000
                 }
                 else -> false
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }

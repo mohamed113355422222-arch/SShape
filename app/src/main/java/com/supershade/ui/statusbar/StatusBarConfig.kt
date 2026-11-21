@@ -129,7 +129,10 @@ data class StatusBarConfig(
     val batteryPercentMode: BatteryPercentMode = BatteryPercentMode.BESIDE,
     val batteryIconScale: Float = 1.0f,
     val showChargingIndicator: Boolean = true,
-    // 3. Network & System Icons
+    // 3. Network, Notification & System Icons
+    val showNotificationIcons: Boolean = true,
+    val maxNotificationIcons: Int = 3,
+    val includeSilentNotifications: Boolean = false,
     val showWifiIcon: Boolean = true,
     val showMobileSignal: Boolean = true,
     val showNetworkType: Boolean = true,

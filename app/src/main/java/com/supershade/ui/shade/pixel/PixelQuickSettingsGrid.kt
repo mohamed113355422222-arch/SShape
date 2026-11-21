@@ -2,7 +2,10 @@ package com.supershade.ui.shade.pixel
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +19,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -27,15 +33,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -47,6 +56,11 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -61,11 +75,25 @@ import com.supershade.haptics.LocalSuperHaptics
 import com.supershade.haptics.SuperHaptics
 import com.supershade.ui.shade.tileIcon
 import com.supershade.ui.theme.getCardBorder
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+
+fun paginatePixelTiles(
+    tiles: List<TileDefinition>,
+    isExpanded: Boolean,
+    isEditing: Boolean,
+): List<List<TileDefinition>> {
+    if (isEditing) return if (tiles.isEmpty()) emptyList() else listOf(tiles)
+    if (!isExpanded) {
+        val collapsed = tiles.take(4)
+        return if (collapsed.isEmpty()) emptyList() else listOf(collapsed)
+    }
+    return tiles.chunked(8)
+}
 
 /**
  * Pixel (Material You / Expressive) Quick Settings Grid.
- * Displays 2 columns of wide stadium pills with smooth spring transitions.
+ * Displays 2 columns of wide stadium pills with smooth spring transitions and multi-page support.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -85,10 +113,8 @@ fun PixelQuickSettingsGrid(
     val context = LocalContext.current
     val haptics = LocalSuperHaptics.current ?: remember(context) { SuperHaptics(context) }
 
-    val displayedTiles = when {
-        isEditing -> tiles
-        isExpanded -> tiles
-        else -> tiles.take(4)
+    val pages = remember(tiles, isExpanded, isEditing) {
+        paginatePixelTiles(tiles = tiles, isExpanded = isExpanded, isEditing = isEditing)
     }
 
     Column(
@@ -175,32 +201,98 @@ fun PixelQuickSettingsGrid(
             }
         }
 
-        // Tile Grid: 2 columns
+        // Tile Grid: 2 columns with multi-page pager when expanded
         if (isEditing) {
             DraggablePixelTileGrid(
-                tiles = displayedTiles,
+                tiles = tiles,
                 haptics = haptics,
                 onMoveTile = onMoveTile,
                 onRemoveTile = onRemoveTile,
             )
-        } else {
-            displayedTiles.chunked(2).forEach { rowTiles ->
-                Row(
+        } else if (pages.isNotEmpty()) {
+            val pagerState = rememberPagerState(pageCount = { pages.size })
+            val pagerScope = rememberCoroutineScope()
+
+            HorizontalPager(
+                state = pagerState,
+                beyondViewportPageCount = 1,
+                userScrollEnabled = pages.size > 1,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("pixel_qs_pager"),
+            ) { pageIdx ->
+                val pageTiles = pages[pageIdx]
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    rowTiles.forEach { tile ->
-                        Box(modifier = Modifier.weight(1f)) {
-                            PixelTilePill(
-                                tile = tile,
-                                onClick = { onTileClick(tile) },
-                                onLongClick = onTileLongClick?.let { cb -> { cb(tile) } },
-                                isEditing = false,
-                            )
+                    pageTiles.chunked(2).forEach { rowTiles ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            rowTiles.forEach { tile ->
+                                Box(modifier = Modifier.weight(1f)) {
+                                    PixelTilePill(
+                                        tile = tile,
+                                        onClick = { onTileClick(tile) },
+                                        onLongClick = onTileLongClick?.let { cb -> { cb(tile) } },
+                                        isEditing = false,
+                                    )
+                                }
+                            }
+                            if (rowTiles.size < 2) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
                         }
                     }
-                    if (rowTiles.size < 2) {
-                        Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+
+            if (pages.size > 1) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    repeat(pages.size) { idx ->
+                        val selected = pagerState.currentPage == idx
+                        val dotWidth by animateDpAsState(
+                            targetValue = if (selected) 18.dp else 6.dp,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium,
+                            ),
+                            label = "pixelQsDotWidth",
+                        )
+                        Box(
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .clip(CircleShape)
+                                .clickable {
+                                    haptics.lightTap()
+                                    pagerScope.launch { pagerState.animateScrollToPage(idx) }
+                                }
+                                .semantics {
+                                    role = Role.Tab
+                                    contentDescription = "Quick Settings page ${idx + 1} of ${pages.size}"
+                                }
+                                .testTag("qs_page_dot_$idx")
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(width = dotWidth, height = 6.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                    )
+                            )
+                        }
                     }
                 }
             }

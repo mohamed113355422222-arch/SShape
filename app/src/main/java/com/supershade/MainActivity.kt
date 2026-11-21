@@ -111,10 +111,21 @@ class MainActivity : ComponentActivity() {
                 onDispose { customStatusBarRepository.stopListening() }
             }
 
-            LaunchedEffect(statusBarConfig.showClockSeconds, statusBarConfig.clockFormat) {
+            LaunchedEffect(
+                statusBarConfig.showClockSeconds,
+                statusBarConfig.clockFormat,
+                statusBarConfig.showNotificationIcons,
+                statusBarConfig.maxNotificationIcons,
+                statusBarConfig.includeSilentNotifications,
+            ) {
                 customStatusBarRepository.setClockOptions(
                     showSeconds = statusBarConfig.showClockSeconds,
                     clockFormat = statusBarConfig.clockFormat,
+                )
+                customStatusBarRepository.setNotificationIconOptions(
+                    showNotificationIcons = statusBarConfig.showNotificationIcons,
+                    maxNotificationIcons = statusBarConfig.maxNotificationIcons,
+                    includeSilentNotifications = statusBarConfig.includeSilentNotifications,
                 )
             }
 
@@ -279,6 +290,11 @@ class MainActivity : ComponentActivity() {
                             val next = transform(statusBarConfig)
                             customStatusBarOverlay.updateConfig(next)
                             customStatusBarRepository.setClockOptions(next.showClockSeconds, next.clockFormat)
+                            customStatusBarRepository.setNotificationIconOptions(
+                                showNotificationIcons = next.showNotificationIcons,
+                                maxNotificationIcons = next.maxNotificationIcons,
+                                includeSilentNotifications = next.includeSilentNotifications,
+                            )
                             scope.launch {
                                 settings.updateStatusBarConfig(transform)
                                 if (wasEnabled != next.enabled) {

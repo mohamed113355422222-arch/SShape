@@ -20,8 +20,11 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
+import com.supershade.domain.notification.model.ShadeCategory
+import com.supershade.domain.notification.model.ShadeNotification
 import com.supershade.domain.system.CustomStatusBarRepository
 import com.supershade.domain.system.CustomStatusBarState
+import com.supershade.domain.system.StatusBarNotificationIcon
 import com.supershade.domain.system.SystemStatusRepository
 import com.supershade.settings.ShadeSettings
 import com.supershade.ui.statusbar.BatteryPercentMode
@@ -285,5 +288,149 @@ class StatusBarVerificationTest {
             "Indicators left edge (${indicatorsBounds.left}) should stay right of cutout (205.dp)",
             indicatorsBounds.left >= 205.dp,
         )
+    }
+
+    @Test
+    fun settingsPersistence_savesAndResetsNotificationIconOptions() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val settings = ShadeSettings(context)
+
+        settings.updateStatusBarConfig {
+            it.copy(
+                showNotificationIcons = false,
+                maxNotificationIcons = 5,
+                includeSilentNotifications = true,
+            )
+        }
+
+        val loaded = settings.statusBarConfig.first()
+        assertFalse(loaded.showNotificationIcons)
+        assertEquals(5, loaded.maxNotificationIcons)
+        assertTrue(loaded.includeSilentNotifications)
+
+        settings.resetStatusBarConfig(keepEnabled = true)
+        val reset = settings.statusBarConfig.first()
+        assertTrue(reset.showNotificationIcons)
+        assertEquals(3, reset.maxNotificationIcons)
+        assertFalse(reset.includeSilentNotifications)
+    }
+
+    @Test
+    fun notificationIconSelection_deduplicatesExcludesSilentAndCapsWithOverflow() {
+        fun fakeNotif(
+            key: String,
+            pkg: String,
+            isGroupSummary: Boolean = false,
+            isSilent: Boolean = false,
+        ) = ShadeNotification(
+            key = key,
+            packageName = pkg,
+            title = "Title",
+            text = "Body",
+            subText = null,
+            category = ShadeCategory.All,
+            smallIcon = null,
+            isGroupSummary = isGroupSummary,
+            groupKey = null,
+            postTime = 1000L,
+            actions = emptyList(),
+            isClearable = true,
+            isSilent = isSilent,
+        )
+
+        val notifications = listOf(
+            fakeNotif("k_sum", "com.chat.app", isGroupSummary = true),
+            fakeNotif("k_self", "com.supershade"),
+            fakeNotif("k1", "com.chat.app"),
+            fakeNotif("k2", "com.chat.app"), // duplicate app
+            fakeNotif("k_silent", "com.weather.silent", isSilent = true),
+            fakeNotif("k3", "com.mail.app"),
+            fakeNotif("k4", "com.music.app"),
+        )
+
+        // Exclude silent, max 2 -> chat + mail, overflow = true (music excluded by cap)
+        val (capped, overflow) = CustomStatusBarRepository.selectStatusBarNotifications(
+            notifications = notifications,
+            showNotificationIcons = true,
+            maxNotificationIcons = 2,
+            includeSilentNotifications = false,
+        )
+        assertEquals(listOf("com.chat.app", "com.mail.app"), capped.map { it.packageName })
+        assertTrue(overflow)
+
+        // Include silent, max 4 -> chat, silent weather, mail, music, overflow = false
+        val (withSilent, noOverflow) = CustomStatusBarRepository.selectStatusBarNotifications(
+            notifications = notifications,
+            showNotificationIcons = true,
+            maxNotificationIcons = 4,
+            includeSilentNotifications = true,
+        )
+        assertEquals(
+            listOf("com.chat.app", "com.weather.silent", "com.mail.app", "com.music.app"),
+            withSilent.map { it.packageName },
+        )
+        assertFalse(noOverflow)
+
+        // Disabled -> empty and no overflow
+        val (disabledList, disabledOverflow) = CustomStatusBarRepository.selectStatusBarNotifications(
+            notifications = notifications,
+            showNotificationIcons = false,
+            maxNotificationIcons = 3,
+            includeSilentNotifications = true,
+        )
+        assertTrue(disabledList.isEmpty())
+        assertFalse(disabledOverflow)
+    }
+
+    @Test
+    fun iosStatusBar_rendersNotificationAppIconsAndOverflowDotAndCutoutClearance() {
+        val sampleState = CustomStatusBarState(
+            timeText = "9:41",
+            batteryPct = 88,
+            notificationIcons = listOf(
+                StatusBarNotificationIcon(key = "k1", packageName = "com.app.one", appName = "Messages"),
+                StatusBarNotificationIcon(key = "k2", packageName = "com.app.two", appName = "Mail"),
+                StatusBarNotificationIcon(key = "k3", packageName = "com.app.three", appName = "Calendar"),
+            ),
+            hasOverflowNotifications = true,
+        )
+
+        val configState = androidx.compose.runtime.mutableStateOf(
+            StatusBarConfig(
+                enabled = true,
+                showNotificationIcons = true,
+                maxNotificationIcons = 2,
+            )
+        )
+
+        composeRule.setContent {
+            Box(modifier = Modifier.width(360.dp)) {
+                IosStatusBar(
+                    state = sampleState,
+                    config = configState.value,
+                    cutoutLeftPx = 155,
+                    cutoutRightPx = 205,
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("ios_statusbar_notif_icons").assertIsDisplayed()
+        composeRule.onNodeWithTag("ios_statusbar_notif_icon_0").assertIsDisplayed()
+        composeRule.onNodeWithTag("ios_statusbar_notif_icon_1").assertIsDisplayed()
+        composeRule.onNodeWithTag("ios_statusbar_notif_icon_2").assertDoesNotExist()
+        composeRule.onNodeWithTag("ios_statusbar_notif_overflow_dot").assertIsDisplayed()
+
+        val notifBounds = composeRule.onNodeWithTag("ios_statusbar_notif_icons").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Notification icons right edge (${notifBounds.right}) should stay left of cutout (155.dp)",
+            notifBounds.right <= 155.dp,
+        )
+
+        // Turn off notification icons -> entire row disappears
+        configState.value = configState.value.copy(showNotificationIcons = false)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("ios_statusbar_notif_icons").assertDoesNotExist()
+        composeRule.onNodeWithTag("ios_statusbar_notif_overflow_dot").assertDoesNotExist()
     }
 }

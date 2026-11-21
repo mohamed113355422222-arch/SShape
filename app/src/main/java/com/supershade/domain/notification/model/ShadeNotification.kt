@@ -30,6 +30,7 @@ data class ShadeNotification(
     val isOngoing: Boolean = false,
     val otpCode: String? = null,
     val isVipAlert: Boolean = false,
+    val isSilent: Boolean = false,
 )
 
 data class NotificationAction(
@@ -38,7 +39,10 @@ data class NotificationAction(
     val replyInput: android.app.RemoteInput? = null,
 )
 
-fun StatusBarNotification.toShadeNotification(category: ShadeCategory): ShadeNotification {
+fun StatusBarNotification.toShadeNotification(
+    category: ShadeCategory,
+    rankingMap: android.service.notification.NotificationListenerService.RankingMap? = null,
+): ShadeNotification {
     val extras = notification.extras
     val rawTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
         ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString()
@@ -78,6 +82,8 @@ fun StatusBarNotification.toShadeNotification(category: ShadeCategory): ShadeNot
         extras.containsKey(Notification.EXTRA_MESSAGES) ||
         !conversationTitle.isNullOrBlank()
 
+    val isSilent = computeIsSilentNotification(this, rankingMap)
+
     return ShadeNotification(
         key = key,
         packageName = packageName,
@@ -110,5 +116,30 @@ fun StatusBarNotification.toShadeNotification(category: ShadeCategory): ShadeNot
         isOngoing = (notification.flags and Notification.FLAG_ONGOING_EVENT != 0) || !isClearable,
         otpCode = com.supershade.domain.notification.OtpDetector.extractOtp(rawTitle, rawText, rawSubText),
         isVipAlert = com.supershade.domain.notification.OtpDetector.isVipAlert(rawTitle, rawText, rawSubText),
+        isSilent = isSilent,
     )
+}
+
+private fun computeIsSilentNotification(
+    sbn: StatusBarNotification,
+    rankingMap: android.service.notification.NotificationListenerService.RankingMap?,
+): Boolean {
+    if (rankingMap != null) {
+        val ranking = android.service.notification.NotificationListenerService.Ranking()
+        if (rankingMap.getRanking(sbn.key, ranking)) {
+            val imp = ranking.importance
+            if (imp != android.app.NotificationManager.IMPORTANCE_UNSPECIFIED) {
+                return imp <= android.app.NotificationManager.IMPORTANCE_LOW
+            }
+            val chImp = ranking.channel?.importance
+            if (chImp != null && chImp != android.app.NotificationManager.IMPORTANCE_UNSPECIFIED) {
+                return chImp <= android.app.NotificationManager.IMPORTANCE_LOW
+            }
+        }
+    }
+    @Suppress("DEPRECATION")
+    val legacyPriority = sbn.notification.priority
+    if (legacyPriority < Notification.PRIORITY_DEFAULT) return true
+    val chId = sbn.notification.channelId.orEmpty()
+    return chId.contains("silent", ignoreCase = true) || chId.contains("low", ignoreCase = true)
 }

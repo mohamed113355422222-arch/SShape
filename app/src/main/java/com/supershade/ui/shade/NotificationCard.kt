@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Check
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.widget.Toast
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -97,6 +98,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -707,6 +709,24 @@ fun NotificationCard(
                                             modifier = Modifier
                                                 .size(if (compact) 18.dp else 22.dp)
                                                 .graphicsLayer { rotationZ = chevronRotation },
+                                        )
+                                    }
+                                }
+                                if (notification.isClearable) {
+                                    IconButton(
+                                        onClick = {
+                                            haptics.notificationDismissCommit()
+                                            onDismiss()
+                                        },
+                                        modifier = Modifier
+                                            .size(if (compact) 28.dp else 36.dp)
+                                            .testTag("notif_dismiss_${notification.key}"),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Dismiss notification",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                            modifier = Modifier.size(if (compact) 15.dp else 18.dp),
                                         )
                                     }
                                 }

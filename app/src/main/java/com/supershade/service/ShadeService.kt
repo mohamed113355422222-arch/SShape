@@ -79,13 +79,29 @@ class ShadeService : Service() {
             .onEach { currentSplitMode = it }
             .launchIn(scope)
 
-        // Attach the gesture capture overlay. When a downward swipe is detected
-        // the overlay tells the ShadeWindowManager to show the full shade UI.
+        // Pre-warm the Compose shade window in GONE state so pulling down responds immediately
+        // without a ~500ms cold Compose inflation lag.
+        windowManager.prewarm()
+
+        // Attach the gesture capture overlay. Streams continuous finger pull-down progress
+        // to ShadeViewModel & ShadeWindowManager for 1:1 Control-Center-style reveals.
         gestureOverlay = GestureOverlay(
             context = this,
             isShadeOpen = { shadeViewModel.state.value.isOpen },
             splitGestureMode = { currentSplitMode },
             onSwipeDown = { expandQs -> shadeViewModel.open(expandQs) },
+            onBeginSwipeOpen = { expandQs ->
+                customStatusBarOverlay.setSuppressedForShade(true)
+                windowManager.beginInteractiveShow(expandQs)
+                shadeViewModel.beginInteractiveOpen(expandQs)
+            },
+            onUpdateSwipeProgress = { progress ->
+                shadeViewModel.updateInteractiveOpen(progress)
+            },
+            onEndSwipeOpen = { shouldOpen, progress, progressVelocity ->
+                shadeViewModel.endInteractiveOpen(shouldOpen, progress, progressVelocity)
+                windowManager.finishInteractiveShow(shouldOpen)
+            },
             onBrightnessSwipe = { brightness ->
                 scope.launch(Dispatchers.IO) {
                     brightnessRepo.set(brightness)
@@ -133,7 +149,13 @@ class ShadeService : Service() {
             .distinctUntilChanged()
             .onEach { isOpen ->
                 customStatusBarOverlay.setSuppressedForShade(isOpen)
-                if (isOpen) windowManager.show() else windowManager.hide()
+                if (isOpen) {
+                    if (!shadeViewModel.isGestureDragging.value) {
+                        windowManager.show()
+                    }
+                } else {
+                    windowManager.hideImmediate()
+                }
             }
             .launchIn(scope)
 
@@ -145,6 +167,11 @@ class ShadeService : Service() {
                 customStatusBarRepository.setClockOptions(
                     showSeconds = cfg.showClockSeconds,
                     clockFormat = cfg.clockFormat,
+                )
+                customStatusBarRepository.setNotificationIconOptions(
+                    showNotificationIcons = cfg.showNotificationIcons,
+                    maxNotificationIcons = cfg.maxNotificationIcons,
+                    includeSilentNotifications = cfg.includeSilentNotifications,
                 )
             }
             .launchIn(scope)
@@ -218,7 +245,7 @@ class ShadeService : Service() {
         gestureOverlay?.detach()
         gestureOverlay = null
         headsUpOverlay.destroy()
-        windowManager.hide()
+        windowManager.destroy()
 
         // Re-enable the native system status bar synchronously before unbinding service.
         governor.restoreSystemStatusBarBlocking()

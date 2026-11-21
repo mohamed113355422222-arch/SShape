@@ -41,6 +41,7 @@ import android.content.Intent
 import android.provider.Settings
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ClearAll
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -73,6 +74,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -145,11 +147,14 @@ fun GroupedNotificationCard(
         }
     }
 
-    val swipeState = rememberFluidSwipeState(key = group.groupKey ?: group.packageName)
+    val hasClearable = group.notifications.any { it.isClearable }
+    val swipeState = rememberFluidSwipeState(key = "${group.packageName}::${group.groupKey.orEmpty()}")
 
     FluidSwipeToDismiss(
         state = swipeState,
         onDismissed = { onDismissGroup() },
+        enableStartToEnd = hasClearable,
+        enableEndToStart = hasClearable,
         modifier = modifier.fillMaxWidth(),
         backgroundContent = {
             val isSwiping = !swipeState.isAtRest
@@ -540,15 +545,18 @@ fun GroupedNotificationCard(
                                             .background(countBadgeBg)
                                             .padding(horizontal = if (compact) 6.dp else 8.dp, vertical = 2.dp),
                                     )
-                                    if (expanded) {
+                                    if (hasClearable) {
                                         IconButton(
                                             onClick = {
+                                                haptics.notificationDismissCommit()
                                                 onDismissGroup()
                                             },
-                                            modifier = Modifier.size(if (compact) 28.dp else 36.dp),
+                                            modifier = Modifier
+                                                .size(if (compact) 28.dp else 36.dp)
+                                                .testTag("group_dismiss_${group.packageName}"),
                                         ) {
                                             Icon(
-                                                imageVector = Icons.Default.ClearAll,
+                                                imageVector = if (expanded) Icons.Default.ClearAll else Icons.Default.Close,
                                                 contentDescription = "Clear group",
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                                                 modifier = Modifier.size(if (compact) 15.dp else 18.dp),

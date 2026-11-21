@@ -23,7 +23,12 @@ class NotificationCollector : NotificationListenerService() {
     private val repository: NotificationRepository by inject()
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        repository.onNotificationPosted(sbn)
+        val rankingMap = try { currentRanking } catch (_: Exception) { null }
+        repository.onNotificationPosted(sbn, rankingMap)
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification, rankingMap: RankingMap?) {
+        repository.onNotificationPosted(sbn, rankingMap)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
@@ -36,6 +41,13 @@ class NotificationCollector : NotificationListenerService() {
         repository.canceller = { key ->
             try {
                 cancelNotification(key)
+            } catch (_: Exception) {}
+        }
+        repository.batchCanceller = { keys ->
+            try {
+                if (keys.isNotEmpty()) {
+                    cancelNotifications(keys.toTypedArray())
+                }
             } catch (_: Exception) {}
         }
         repository.snoozer = { key, durationMs ->
@@ -55,6 +67,7 @@ class NotificationCollector : NotificationListenerService() {
         super.onListenerDisconnected()
         instance = null
         repository.canceller = null
+        repository.batchCanceller = null
         repository.snoozer = null
         repository.clearAller = null
     }
@@ -62,7 +75,8 @@ class NotificationCollector : NotificationListenerService() {
     fun refreshNotifications() {
         try {
             val current = activeNotifications ?: return
-            current.forEach { repository.onNotificationPosted(it) }
+            val rankingMap = try { currentRanking } catch (_: Exception) { null }
+            current.forEach { repository.onNotificationPosted(it, rankingMap) }
         } catch (_: Exception) {}
     }
 }

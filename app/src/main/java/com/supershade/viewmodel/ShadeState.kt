@@ -21,6 +21,53 @@ enum class TileDetailType {
     HOTSPOT,
 }
 
+data class WifiNetworkItem(
+    val ssid: String,
+    val security: String,
+    val rssi: Int,
+    val frequencyMhz: Int,
+    val isConnected: Boolean = false,
+    val isSaved: Boolean = false,
+    val isSecured: Boolean = true,
+) {
+    val signalBars: Int
+        get() = when {
+            rssi >= -55 -> 4
+            rssi >= -67 -> 3
+            rssi >= -78 -> 2
+            rssi >= -88 -> 1
+            else -> 0
+        }
+
+    val bandLabel: String
+        get() = when {
+            frequencyMhz > 5925 -> "6 GHz"
+            frequencyMhz > 4900 -> "5 GHz"
+            frequencyMhz > 2400 -> "2.4 GHz"
+            else -> ""
+        }
+}
+
+enum class BluetoothDeviceCategory {
+    HEADPHONES,
+    SPEAKER,
+    WATCH,
+    CAR,
+    INPUT,
+    PHONE,
+    OTHER,
+}
+
+data class BluetoothDeviceItem(
+    val name: String,
+    val address: String,
+    val isConnected: Boolean = false,
+    val isPaired: Boolean = true,
+    val batteryLevel: Int? = null,
+    val category: BluetoothDeviceCategory = BluetoothDeviceCategory.OTHER,
+    val statusText: String = "Paired",
+)
+
 data class TileDetailState(
     val type: TileDetailType,
     val title: String,
@@ -33,8 +80,17 @@ data class TileDetailState(
     val wifiIp: String? = null,
     val wifiLinkSpeed: String? = null,
     val wifiRssi: Int = 0,
+    val wifiNetworks: List<WifiNetworkItem> = emptyList(),
+    val wifiIsScanning: Boolean = false,
+    val wifiNeedsLocationPermission: Boolean = false,
+    val wifiStatusMessage: String? = null,
     val btDeviceName: String? = null,
     val btAudioConnected: Boolean = false,
+    val btDevices: List<BluetoothDeviceItem> = emptyList(),
+    val btNearbyDevices: List<BluetoothDeviceItem> = emptyList(),
+    val btIsScanning: Boolean = false,
+    val btNeedsPermission: Boolean = false,
+    val btStatusMessage: String? = null,
     val ringerMode: Int = 2, // AudioManager.RINGER_MODE_NORMAL
     val mediaVol: Int = 0,
     val mediaMaxVol: Int = 15,

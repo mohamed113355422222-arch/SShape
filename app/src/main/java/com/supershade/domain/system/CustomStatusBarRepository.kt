@@ -11,6 +11,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.Icon
 import android.location.LocationManager
 import android.media.AudioManager
 import android.net.ConnectivityManager
@@ -29,8 +32,13 @@ import android.telephony.TelephonyCallback
 import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
 import android.text.format.DateFormat
+import android.util.LruCache
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
+import com.supershade.domain.notification.NotificationRepository
+import com.supershade.domain.notification.model.ShadeNotification
 import com.supershade.ui.statusbar.ClockFormat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,12 +49,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+data class StatusBarNotificationIcon(
+    val key: String,
+    val packageName: String,
+    val bitmap: ImageBitmap? = null,
+    val appName: String = "",
+)
 
 data class CustomStatusBarState(
     val timeText: String = "",
@@ -67,6 +83,8 @@ data class CustomStatusBarState(
     val isVibrate: Boolean = false,
     val hasAlarm: Boolean = false,
     val isLocationEnabled: Boolean = false,
+    val notificationIcons: List<StatusBarNotificationIcon> = emptyList(),
+    val hasOverflowNotifications: Boolean = false,
 )
 
 /**
@@ -82,6 +100,7 @@ data class CustomStatusBarState(
 class CustomStatusBarRepository(
     private val context: Context,
     systemStatusRepo: SystemStatusRepository,
+    private val notificationRepo: NotificationRepository? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -105,6 +124,9 @@ class CustomStatusBarRepository(
     private val wifiFlow = MutableStateFlow(WifiSnapshot(false, 0))
     private val cellularFlow = MutableStateFlow(CellularSnapshot(false, false, 0, ""))
     private val systemFlagsFlow = MutableStateFlow(readSystemFlags())
+    private val notificationOptionsFlow = MutableStateFlow(NotificationIconOptions())
+    private val iconCache = LruCache<String, ImageBitmap>(24)
+    private val appNameCache = LruCache<String, String>(32)
 
     @Volatile private var activeCollectorCount = 0
     private val lock = Any()
@@ -117,7 +139,7 @@ class CustomStatusBarRepository(
     private var legacyPhoneListener: PhoneStateListener? = null
     private var secondsTickerJob: Job? = null
 
-    val statusBarState: StateFlow<CustomStatusBarState> = combine(
+    private val systemTelemetryFlow = combine(
         timeFlow,
         systemStatusRepo.batteryState,
         wifiFlow,
@@ -144,6 +166,23 @@ class CustomStatusBarRepository(
             hasAlarm = flags.hasAlarm,
             isLocationEnabled = flags.locationEnabled,
         )
+    }
+
+    private val notificationDisplayFlow = combine(
+        notificationRepo?.notifications ?: flowOf(emptyList()),
+        notificationOptionsFlow,
+    ) { notifications, options ->
+        buildNotificationIconSnapshot(notifications, options)
+    }
+
+    val statusBarState: StateFlow<CustomStatusBarState> = combine(
+        systemTelemetryFlow,
+        notificationDisplayFlow,
+    ) { telemetry, notifSnap ->
+        telemetry.copy(
+            notificationIcons = notifSnap.icons,
+            hasOverflowNotifications = notifSnap.hasOverflow,
+        )
     }.stateIn(
         scope = scope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 2_000L),
@@ -168,6 +207,21 @@ class CustomStatusBarRepository(
             synchronized(lock) {
                 updateSecondsTickerLocked()
             }
+        }
+    }
+
+    fun setNotificationIconOptions(
+        showNotificationIcons: Boolean,
+        maxNotificationIcons: Int,
+        includeSilentNotifications: Boolean,
+    ) {
+        val next = NotificationIconOptions(
+            show = showNotificationIcons,
+            maxIcons = maxNotificationIcons.coerceIn(1, 6),
+            includeSilent = includeSilentNotifications,
+        )
+        if (notificationOptionsFlow.value != next) {
+            notificationOptionsFlow.value = next
         }
     }
 
@@ -744,6 +798,112 @@ class CustomStatusBarRepository(
         TelephonyManager.NETWORK_TYPE_CDMA,
         TelephonyManager.NETWORK_TYPE_1xRTT -> "2G"
         else -> ""
+    }
+
+    private fun buildNotificationIconSnapshot(
+        notifications: List<ShadeNotification>,
+        options: NotificationIconOptions,
+    ): NotificationIconSnapshot {
+        val (selected, hasOverflow) = selectStatusBarNotifications(
+            notifications = notifications,
+            showNotificationIcons = options.show,
+            maxNotificationIcons = options.maxIcons,
+            includeSilentNotifications = options.includeSilent,
+        )
+        if (selected.isEmpty()) return NotificationIconSnapshot(emptyList(), false)
+        val icons = selected.map { note ->
+            StatusBarNotificationIcon(
+                key = note.key,
+                packageName = note.packageName,
+                bitmap = loadIconBitmap(note),
+                appName = resolveAppLabel(note.packageName),
+            )
+        }
+        return NotificationIconSnapshot(icons = icons, hasOverflow = hasOverflow)
+    }
+
+    private fun loadIconBitmap(note: ShadeNotification): ImageBitmap? {
+        val icon = note.smallIcon ?: return null
+        val cacheKey = buildIconCacheKey(note.packageName, icon, note.key)
+        iconCache.get(cacheKey)?.let { return it }
+        return try {
+            val drawable = icon.loadDrawable(context) ?: return null
+            val px = 36
+            val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            drawable.setBounds(0, 0, px, px)
+            drawable.draw(canvas)
+            bmp.asImageBitmap().also { iconCache.put(cacheKey, it) }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun buildIconCacheKey(packageName: String, icon: Icon, fallbackKey: String): String {
+        return try {
+            if (icon.type == Icon.TYPE_RESOURCE) {
+                "${icon.resPackage}:$packageName:${icon.resId}"
+            } else {
+                "$packageName:$fallbackKey"
+            }
+        } catch (_: Throwable) {
+            "$packageName:$fallbackKey"
+        }
+    }
+
+    private fun resolveAppLabel(packageName: String): String {
+        appNameCache.get(packageName)?.let { return it }
+        val resolved = try {
+            val pm = context.packageManager
+            val info = pm.getApplicationInfo(packageName, 0)
+            pm.getApplicationLabel(info)?.toString()?.takeIf { it.isNotBlank() } ?: packageName
+        } catch (_: Throwable) {
+            packageName
+        }
+        appNameCache.put(packageName, resolved)
+        return resolved
+    }
+
+    private data class NotificationIconOptions(
+        val show: Boolean = true,
+        val maxIcons: Int = 3,
+        val includeSilent: Boolean = false,
+    )
+
+    private data class NotificationIconSnapshot(
+        val icons: List<StatusBarNotificationIcon>,
+        val hasOverflow: Boolean,
+    )
+
+    companion object {
+        /**
+         * Filters active notifications for the status bar, deduplicating by app package
+         * while preserving newest order, enforcing [maxNotificationIcons], and reporting
+         * whether extra notifications remain hidden behind an overflow dot.
+         */
+        internal fun selectStatusBarNotifications(
+            notifications: List<ShadeNotification>,
+            showNotificationIcons: Boolean,
+            maxNotificationIcons: Int,
+            includeSilentNotifications: Boolean,
+        ): Pair<List<ShadeNotification>, Boolean> {
+            if (!showNotificationIcons) return emptyList<ShadeNotification>() to false
+            val limit = maxNotificationIcons.coerceIn(1, 6)
+            val eligible = ArrayList<ShadeNotification>(notifications.size)
+            val seenPackages = HashSet<String>(notifications.size)
+            for (n in notifications) {
+                if (n.isGroupSummary) continue
+                if (n.packageName == "com.supershade") continue
+                if (!includeSilentNotifications && n.isSilent) continue
+                if (seenPackages.add(n.packageName)) {
+                    eligible.add(n)
+                }
+            }
+            if (eligible.isEmpty()) return emptyList<ShadeNotification>() to false
+            val capped = eligible.take(limit)
+            val hasOverflow = eligible.size > limit
+            return capped to hasOverflow
+        }
     }
 
     private data class WifiSnapshot(

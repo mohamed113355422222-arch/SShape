@@ -1,6 +1,7 @@
 package com.supershade.ui.statusbar
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,17 +23,20 @@ import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.BluetoothConnected
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.NightsStay
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
@@ -216,6 +220,72 @@ fun IosStatusBar(
             )
         }
 
+        val maxIcons = config.maxNotificationIcons.coerceIn(1, 6)
+        val hasVisibleNotifIcons = config.showNotificationIcons && state.notificationIcons.isNotEmpty()
+        val displayedNotifIcons = if (hasVisibleNotifIcons) state.notificationIcons.take(maxIcons) else emptyList()
+        val showNotifOverflowDot = hasVisibleNotifIcons &&
+            (state.hasOverflowNotifications || state.notificationIcons.size > maxIcons)
+
+        @Composable
+        fun NotificationIconsContent(modifier: Modifier = Modifier) {
+            if (!hasVisibleNotifIcons) return
+            val notifIconDp = config.iconSizeDp.coerceIn(10f, 18f).dp
+            val notifSpacingDp = (config.iconSpacingDp * 0.8f).coerceIn(2f, 8f).dp
+            val dotSizeDp = (config.iconSizeDp * 0.30f).coerceIn(3.5f, 5.5f).dp
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(notifSpacingDp),
+                modifier = modifier
+                    .graphicsLayer {
+                        translationX = if (effectiveClockAlign == StatusBarHorizontalAlign.LEFT) clockOffsetXPx else 0f
+                        translationY = verticalOffsetPx
+                    }
+                    .clipToBounds()
+                    .testTag("ios_statusbar_notif_icons"),
+            ) {
+                displayedNotifIcons.forEachIndexed { idx, item ->
+                    val label = item.appName.ifBlank { item.packageName }
+                    val tag = "ios_statusbar_notif_icon_$idx"
+                    if (item.bitmap != null) {
+                        Image(
+                            bitmap = item.bitmap,
+                            contentDescription = label,
+                            colorFilter = ColorFilter.tint(iconColor),
+                            modifier = Modifier
+                                .size(notifIconDp)
+                                .testTag(tag),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Notifications,
+                            contentDescription = label,
+                            tint = iconColor,
+                            modifier = Modifier
+                                .size(notifIconDp)
+                                .testTag(tag),
+                        )
+                    }
+                }
+                if (showNotifOverflowDot) {
+                    Canvas(
+                        modifier = Modifier
+                            .size(dotSizeDp)
+                            .semantics { contentDescription = "More notifications" }
+                            .testTag("ios_statusbar_notif_overflow_dot"),
+                    ) {
+                        if (applyShadow) {
+                            drawCircle(
+                                color = shadowColor,
+                                center = Offset(size.width / 2f, size.height / 2f + 0.5.dp.toPx()),
+                            )
+                        }
+                        drawCircle(color = iconColor.copy(alpha = 0.88f))
+                    }
+                }
+            }
+        }
+
         @Composable
         fun IndicatorContent(modifier: Modifier = Modifier) {
             val iconScale = (config.iconSizeDp / 13f).coerceIn(0.75f, 1.45f)
@@ -372,6 +442,7 @@ fun IosStatusBar(
                         horizontalArrangement = Arrangement.spacedBy(config.iconSpacingDp.dp),
                     ) {
                         if (effectiveClockAlign == StatusBarHorizontalAlign.LEFT) ClockContent()
+                        NotificationIconsContent(modifier = Modifier.weight(1f, fill = false))
                         if (effectiveIndicatorAlign == StatusBarHorizontalAlign.LEFT) IndicatorContent()
                     }
                 }
@@ -414,6 +485,7 @@ fun IosStatusBar(
                         horizontalArrangement = Arrangement.spacedBy(config.iconSpacingDp.dp),
                     ) {
                         if (effectiveClockAlign == StatusBarHorizontalAlign.LEFT) ClockContent()
+                        NotificationIconsContent()
                         if (effectiveIndicatorAlign == StatusBarHorizontalAlign.LEFT) IndicatorContent()
                     }
                 }
@@ -437,7 +509,8 @@ fun IosStatusBar(
                 }
 
                 if (effectiveClockAlign == StatusBarHorizontalAlign.LEFT ||
-                    effectiveIndicatorAlign == StatusBarHorizontalAlign.LEFT
+                    effectiveIndicatorAlign == StatusBarHorizontalAlign.LEFT ||
+                    hasVisibleNotifIcons
                 ) {
                     Box(
                         modifier = Modifier.align(

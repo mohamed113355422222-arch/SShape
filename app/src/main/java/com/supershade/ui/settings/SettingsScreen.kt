@@ -628,6 +628,12 @@ fun SettingsScreen(
             onRequestShizukuPermission = onRequestShizukuPermission,
             onOpenShizukuManager = onOpenShizukuManager,
             onRequestTelemetryPermissions = onRequestTelemetryPermissions,
+            notificationAccessGranted = notificationAccessGranted,
+            onOpenNotificationAccess = {
+                try {
+                    context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                } catch (_: Exception) {}
+            },
         )
 
         // =======================================================================

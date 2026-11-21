@@ -84,20 +84,74 @@ import com.supershade.settings.TileShape
 import com.supershade.settings.TileSize
 import com.supershade.ui.theme.ShadeTheme
 import com.supershade.ui.theme.ChamferedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.testTag
 import com.supershade.settings.DeviceControlMode
 import com.supershade.domain.tile.CANONICAL_TILES
 import com.supershade.domain.tile.KNOWN_TILES
 import com.supershade.domain.tile.canonicalTileId
 import com.supershade.domain.tile.humanizeTileLabel
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+
+/**
+ * Splits quick-settings tiles into pages without truncating at a single page:
+ * - Collapsed mode renders a single row of [colCount] tiles.
+ * - Edit mode keeps all tiles in one flat grid for uninterrupted drag-and-drop.
+ * - Expanded mode allocates 2 rows beneath the connectivity cluster on page 1 (or 3 rows
+ *   when wide connectivity cards are hidden) and 4 rows on subsequent pages, producing zero
+ *   empty trailing pages.
+ */
+fun paginateQuickSettingsTiles(
+    tiles: List<TileDefinition>,
+    isExpanded: Boolean,
+    isEditing: Boolean,
+    colCount: Int,
+    hasCluster: Boolean,
+    clusterExcludedIds: Set<String> = emptySet(),
+): List<List<TileDefinition>> {
+    val safeCols = colCount.coerceAtLeast(1)
+    if (isEditing) return if (tiles.isEmpty()) emptyList() else listOf(tiles)
+    if (!isExpanded) {
+        val collapsed = tiles.take(safeCols)
+        return if (collapsed.isEmpty()) emptyList() else listOf(collapsed)
+    }
+
+    val remaining = if (hasCluster && clusterExcludedIds.isNotEmpty()) {
+        tiles.filter { it.id !in clusterExcludedIds }
+    } else {
+        tiles
+    }
+    if (remaining.isEmpty()) return emptyList()
+
+    val firstPageCap = if (hasCluster) safeCols * 2 else safeCols * 3
+    val subsequentPageCap = (safeCols * 4).coerceAtLeast(firstPageCap)
+
+    val pages = mutableListOf<List<TileDefinition>>()
+    val firstPage = remaining.take(firstPageCap)
+    if (firstPage.isNotEmpty()) pages.add(firstPage)
+
+    var index = firstPage.size
+    while (index < remaining.size) {
+        val nextPage = remaining.subList(index, (index + subsequentPageCap).coerceAtMost(remaining.size))
+        if (nextPage.isNotEmpty()) pages.add(nextPage)
+        index += subsequentPageCap
+    }
+    return pages
+}
 
 /**
  * Quick settings grid supporting compact mode (1 row, dynamic columns)
@@ -138,15 +192,19 @@ fun QuickSettingsGrid(
     val airplaneTile = if (showOneUiIslandCards) tiles.firstOrNull { it.id == "airplane" } else null
     val hotspotTile = if (showOneUiIslandCards) tiles.firstOrNull { it.id == "hotspot" || it.id.contains("tether") } else null
     val hasCluster = wifiTile != null && btTile != null
+    val clusterIds = if (hasCluster) {
+        setOfNotNull(wifiTile?.id, btTile?.id, airplaneTile?.id, hotspotTile?.id)
+    } else emptySet()
 
-    val displayedTiles = when {
-        isEditing  -> tiles
-        hasCluster -> {
-            val clusterIds = setOfNotNull(wifiTile?.id, btTile?.id, airplaneTile?.id, hotspotTile?.id)
-            tiles.filter { it.id !in clusterIds }.take(colCount * 2)
-        }
-        isExpanded -> tiles.take(colCount * 3)
-        else       -> tiles.take(colCount)
+    val pages = remember(tiles, isExpanded, isEditing, colCount, hasCluster, clusterIds) {
+        paginateQuickSettingsTiles(
+            tiles = tiles,
+            isExpanded = isExpanded,
+            isEditing = isEditing,
+            colCount = colCount,
+            hasCluster = hasCluster,
+            clusterExcludedIds = clusterIds,
+        )
     }
 
     Surface(
@@ -241,81 +299,10 @@ fun QuickSettingsGrid(
                 }
             }
 
-            // ── Connectivity Cluster (Wi-Fi, BT, Hotspot, Airplane) ───────────
-            if (!isEditing && wifiTile != null && btTile != null) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    // Row 1: Wi-Fi & Bluetooth
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        ConnectivityWideCard(
-                            tile = wifiTile,
-                            theme = theme,
-                            tileShape = tileShape,
-                            onClick = { onTileClick(wifiTile) },
-                            onLongClick = onTileLongClick?.let { cb -> { cb(wifiTile) } },
-                            modifier = Modifier.weight(1f),
-                        )
-                        ConnectivityWideCard(
-                            tile = btTile,
-                            theme = theme,
-                            tileShape = tileShape,
-                            onClick = { onTileClick(btTile) },
-                            onLongClick = onTileLongClick?.let { cb -> { cb(btTile) } },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-
-                    // Row 2: Hotspot & Airplane (2x2 cluster)
-                    if (airplaneTile != null && hotspotTile != null) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            ConnectivityWideCard(
-                                tile = airplaneTile,
-                                theme = theme,
-                                tileShape = tileShape,
-                                onClick = { onTileClick(airplaneTile) },
-                                onLongClick = onTileLongClick?.let { cb -> { cb(airplaneTile) } },
-                                modifier = Modifier.weight(1f),
-                            )
-                            ConnectivityWideCard(
-                                tile = hotspotTile,
-                                theme = theme,
-                                tileShape = tileShape,
-                                onClick = { onTileClick(hotspotTile) },
-                                onLongClick = onTileLongClick?.let { cb -> { cb(hotspotTile) } },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    } else if (airplaneTile != null || hotspotTile != null) {
-                        val secondary = airplaneTile ?: hotspotTile!!
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            ConnectivityWideCard(
-                                tile = secondary,
-                                theme = theme,
-                                tileShape = tileShape,
-                                onClick = { onTileClick(secondary) },
-                                onLongClick = onTileLongClick?.let { cb -> { cb(secondary) } },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // ── Tile grid — normal or drag-to-reorder ─────────────────────────
+            // ── Tile grid — normal (multi-page HorizontalPager) or drag-to-reorder ─
             if (isEditing) {
                 DraggableTileGrid(
-                    tiles = displayedTiles,
+                    tiles = tiles,
                     theme = theme,
                     tileShape = tileShape,
                     tileSize = tileSize,
@@ -324,32 +311,124 @@ fun QuickSettingsGrid(
                     onMoveTile = onMoveTile,
                     onRemoveTile = onRemoveTile,
                 )
-            } else {
-                displayedTiles.chunked(colCount).forEach { rowTiles ->
-                    Row(
+            } else if (pages.isNotEmpty()) {
+                val pagerState = rememberPagerState(pageCount = { pages.size })
+                val pagerScope = rememberCoroutineScope()
+
+                HorizontalPager(
+                    state = pagerState,
+                    beyondViewportPageCount = 1,
+                    userScrollEnabled = pages.size > 1,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("qs_pager"),
+                ) { pageIdx ->
+                    val pageTiles = pages[pageIdx]
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(if (colCount >= 5) 6.dp else 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        rowTiles.forEach { tile ->
-                            Box(modifier = Modifier.weight(1f)) {
-                                TileCard(
-                                    tile = tile,
-                                    theme = theme,
-                                    isShizukuConnected = isShizukuConnected,
-                                    tileShape = tileShape,
-                                    tileSize = tileSize,
-                                    columns = colCount,
-                                    onClick = { onTileClick(tile) },
-                                    onLongClick = onTileLongClick?.let { cb -> { cb(tile) } },
-                                    isEditing = false,
-                                )
-                            }
+                        // Keep connectivity cluster at top of page 0
+                        if (pageIdx == 0 && wifiTile != null && btTile != null) {
+                            ConnectivityClusterSection(
+                                wifiTile = wifiTile,
+                                btTile = btTile,
+                                airplaneTile = airplaneTile,
+                                hotspotTile = hotspotTile,
+                                theme = theme,
+                                tileShape = tileShape,
+                                onTileClick = onTileClick,
+                                onTileLongClick = onTileLongClick,
+                            )
                         }
-                        repeat(colCount - rowTiles.size) {
-                            Spacer(modifier = Modifier.weight(1f))
+
+                        pageTiles.chunked(colCount).forEach { rowTiles ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(if (colCount >= 5) 6.dp else 8.dp),
+                            ) {
+                                rowTiles.forEach { tile ->
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        TileCard(
+                                            tile = tile,
+                                            theme = theme,
+                                            isShizukuConnected = isShizukuConnected,
+                                            tileShape = tileShape,
+                                            tileSize = tileSize,
+                                            columns = colCount,
+                                            onClick = { onTileClick(tile) },
+                                            onLongClick = onTileLongClick?.let { cb -> { cb(tile) } },
+                                            isEditing = false,
+                                        )
+                                    }
+                                }
+                                repeat(colCount - rowTiles.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
                         }
                     }
                 }
+
+                // Page indicator dots when multiple pages exist
+                if (pages.size > 1) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        repeat(pages.size) { idx ->
+                            val selected = pagerState.currentPage == idx
+                            val dotWidth by animateDpAsState(
+                                targetValue = if (selected) 18.dp else 6.dp,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessMedium,
+                                ),
+                                label = "qsPageDotWidth",
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        haptics.lightTap()
+                                        pagerScope.launch { pagerState.animateScrollToPage(idx) }
+                                    }
+                                    .semantics {
+                                        role = Role.Tab
+                                        contentDescription = "Quick Settings page ${idx + 1} of ${pages.size}"
+                                    }
+                                    .testTag("qs_page_dot_$idx")
+                                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(width = dotWidth, height = 6.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                        )
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (wifiTile != null && btTile != null) {
+                ConnectivityClusterSection(
+                    wifiTile = wifiTile,
+                    btTile = btTile,
+                    airplaneTile = airplaneTile,
+                    hotspotTile = hotspotTile,
+                    theme = theme,
+                    tileShape = tileShape,
+                    onTileClick = onTileClick,
+                    onTileLongClick = onTileLongClick,
+                )
             }
 
             // ── Available Buttons drawer ───────────────────────────────────────
@@ -689,6 +768,84 @@ private fun DraggableTileGrid(
 }
 
 @Composable
+private fun ConnectivityClusterSection(
+    wifiTile: TileDefinition,
+    btTile: TileDefinition,
+    airplaneTile: TileDefinition?,
+    hotspotTile: TileDefinition?,
+    theme: ShadeTheme,
+    tileShape: TileShape,
+    onTileClick: (TileDefinition) -> Unit,
+    onTileLongClick: ((TileDefinition) -> Unit)?,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ConnectivityWideCard(
+                tile = wifiTile,
+                theme = theme,
+                tileShape = tileShape,
+                onClick = { onTileClick(wifiTile) },
+                onLongClick = onTileLongClick?.let { cb -> { cb(wifiTile) } },
+                modifier = Modifier.weight(1f),
+            )
+            ConnectivityWideCard(
+                tile = btTile,
+                theme = theme,
+                tileShape = tileShape,
+                onClick = { onTileClick(btTile) },
+                onLongClick = onTileLongClick?.let { cb -> { cb(btTile) } },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        if (airplaneTile != null && hotspotTile != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ConnectivityWideCard(
+                    tile = airplaneTile,
+                    theme = theme,
+                    tileShape = tileShape,
+                    onClick = { onTileClick(airplaneTile) },
+                    onLongClick = onTileLongClick?.let { cb -> { cb(airplaneTile) } },
+                    modifier = Modifier.weight(1f),
+                )
+                ConnectivityWideCard(
+                    tile = hotspotTile,
+                    theme = theme,
+                    tileShape = tileShape,
+                    onClick = { onTileClick(hotspotTile) },
+                    onLongClick = onTileLongClick?.let { cb -> { cb(hotspotTile) } },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else if (airplaneTile != null || hotspotTile != null) {
+            val secondary = airplaneTile ?: hotspotTile!!
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ConnectivityWideCard(
+                    tile = secondary,
+                    theme = theme,
+                    tileShape = tileShape,
+                    onClick = { onTileClick(secondary) },
+                    onLongClick = onTileLongClick?.let { cb -> { cb(secondary) } },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ConnectivityWideCard(
     tile: TileDefinition,
     theme: ShadeTheme,
@@ -1001,7 +1158,8 @@ private fun ConnectivityWideCard(
                         tint = contentColor.copy(alpha = 0.55f),
                         modifier = Modifier
                             .size(18.dp)
-                            .offset(x = chevronNudge),
+                            .offset(x = chevronNudge)
+                            .testTag("tile_chevron_${tile.id}"),
                     )
                 }
             }

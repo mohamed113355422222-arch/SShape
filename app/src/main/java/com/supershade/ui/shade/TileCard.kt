@@ -111,9 +111,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -395,22 +398,52 @@ fun TileCard(
                             },
                     )
                 }
-                    if (activeDotScale > 0.05f) {
-                        val dotColor = when (theme) {
-                            is ShadeTheme.Nothing -> Color(0xFFD71920) // Nothing signature glyph red
-                            is ShadeTheme.Cyberpunk -> MaterialTheme.colorScheme.secondary // Hot neon pink
-                            else -> contentColor.copy(alpha = 0.85f)
+                    val isExpandable = tile.id in setOf("wifi", "internet", "bt", "bluetooth", "flashlight", "mute", "dnd", "hotspot")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        if (activeDotScale > 0.05f) {
+                            val dotColor = when (theme) {
+                                is ShadeTheme.Nothing -> Color(0xFFD71920) // Nothing signature glyph red
+                                is ShadeTheme.Cyberpunk -> MaterialTheme.colorScheme.secondary // Hot neon pink
+                                else -> contentColor.copy(alpha = 0.85f)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(if (columns >= 5) 5.dp else 6.dp)
+                                    .graphicsLayer {
+                                        scaleX = activeDotScale
+                                        scaleY = activeDotScale
+                                    }
+                                    .clip(CircleShape)
+                                    .background(dotColor),
+                            )
                         }
-                        Box(
-                            modifier = Modifier
-                                .size(if (columns >= 5) 5.dp else 6.dp)
-                                .graphicsLayer {
-                                    scaleX = activeDotScale
-                                    scaleY = activeDotScale
-                                }
-                                .clip(CircleShape)
-                                .background(dotColor),
-                        )
+                        if (isExpandable && !isEditing && onLongClick != null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        haptics.sheetDetent()
+                                        onLongClick()
+                                    }
+                                    .semantics {
+                                        role = Role.Button
+                                        contentDescription = "${tile.label} options"
+                                    }
+                                    .testTag("tile_chevron_${tile.id}"),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = contentColor.copy(alpha = 0.72f),
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
+                        }
                     }
                 }
                 val baseSize = when (tileSize) {
@@ -517,7 +550,8 @@ fun tileIcon(id: String, isActive: Boolean, subtitle: String?): ImageVector {
         key.contains("hotspot") || key.contains("tether") -> Icons.Default.WifiTethering
         key.contains("dnd") || key.contains("disturb")   -> Icons.Default.DoNotDisturb
         key.contains("rotation") || key.contains("rotate") -> Icons.Default.ScreenRotation
-        key.contains("dark") || key.contains("night") || key.contains("uimode") -> Icons.Default.DarkMode
+        key == "night" || key.contains("nightlight") || key.contains("bluelight") || key.contains("blue_light") || key.contains("eyecomfort") -> Icons.Default.NightsStay
+        key.contains("dark") || key.contains("uimode") -> Icons.Default.DarkMode
         key.contains("flash") || key.contains("torch")   -> Icons.Default.FlashOn
         key.contains("location") || key.contains("gps")  -> Icons.Default.LocationOn
         key.contains("nfc")                             -> Icons.Default.Nfc

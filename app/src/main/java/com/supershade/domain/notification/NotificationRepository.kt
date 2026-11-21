@@ -111,6 +111,7 @@ class NotificationRepository(
 
     // Set by NotificationCollector when the listener service is connected.
     var canceller: ((String) -> Unit)? = null
+    var batchCanceller: ((List<String>) -> Unit)? = null
     var snoozer: ((String, Long) -> Unit)? = null
     var clearAller: (() -> Unit)? = null
 
@@ -209,7 +210,10 @@ class NotificationRepository(
         com.supershade.service.NotificationCollector.instance?.refreshNotifications()
     }
 
-    fun onNotificationPosted(sbn: StatusBarNotification) {
+    fun onNotificationPosted(
+        sbn: StatusBarNotification,
+        rankingMap: android.service.notification.NotificationListenerService.RankingMap? = null,
+    ) {
         activeSbns[sbn.key] = sbn
 
         // Apps like Samsung Voice Recorder post an ongoing MediaStyle service notification
@@ -217,13 +221,13 @@ class NotificationRepository(
         // they are routed to the media card.
         if (isMediaOnlyNotification(sbn)) {
             val category = categoryEngine.categorize(sbn, currentClassificationMode, currentAppOverrides, adaptiveLoop)
-            val shade = sbn.toShadeNotification(category)
+            val shade = sbn.toShadeNotification(category, rankingMap)
             _voiceRecorderNotification.value = shade
             return
         }
 
         val category = categoryEngine.categorize(sbn, currentClassificationMode, currentAppOverrides, adaptiveLoop)
-        val shade = sbn.toShadeNotification(category)
+        val shade = sbn.toShadeNotification(category, rankingMap)
 
         if (shade.title.isBlank() && shade.text.isBlank()) return
         if (isSnoozed(shade.key)) return
@@ -278,12 +282,13 @@ class NotificationRepository(
         _notifications.update { current -> current.filter { it.key != key } }
     }
 
-    fun cancelAndRemove(key: String) {
+    fun cancelAndRemove(key: String): Boolean {
         val target = _notifications.value.find { it.key == key }
+        if (target != null && !target.isClearable) {
+            return false
+        }
         if (target != null) {
-            if (target.isClearable) {
-                _lastDismissed.value = target
-            }
+            _lastDismissed.value = target
             val elapsed = System.currentTimeMillis() - target.postTime
             val isFast = elapsed in 0..4000L
             adaptiveLoop?.recordInteraction(
@@ -294,6 +299,63 @@ class NotificationRepository(
         }
         canceller?.invoke(key)
         onNotificationRemoved(key)
+        return true
+    }
+
+    fun cancelGroup(keys: List<String>): Int {
+        if (keys.isEmpty()) return 0
+        val keySet = keys.toSet()
+        val dismissible = _notifications.value.filter { it.key in keySet && it.isClearable }
+        if (dismissible.isEmpty()) return 0
+
+        val dismissibleKeys = dismissible.map { it.key }
+        val dismissibleKeySet = dismissibleKeys.toSet()
+        _lastDismissed.value = dismissible.first()
+
+        val now = System.currentTimeMillis()
+        val newRecords = dismissible
+            .filter { it.packageName != "com.supershade" }
+            .map { removed ->
+                DismissedNotificationRecord(
+                    key = removed.key,
+                    packageName = removed.packageName,
+                    title = removed.title,
+                    text = removed.text,
+                    postTime = removed.postTime,
+                    dismissedTime = now,
+                    category = removed.category,
+                    isClearable = removed.isClearable,
+                    channelId = removed.channelId,
+                )
+            }
+
+        dismissible.forEach { target ->
+            activeSbns.remove(target.key)
+            if (_voiceRecorderNotification.value?.key == target.key) {
+                _voiceRecorderNotification.value = null
+            }
+            val elapsed = now - target.postTime
+            val isFast = elapsed in 0..4000L
+            adaptiveLoop?.recordInteraction(
+                target.packageName,
+                target.channelId,
+                if (isFast) NotificationInteractionType.FAST_DISMISS else NotificationInteractionType.DISMISS,
+            )
+        }
+
+        if (newRecords.isNotEmpty()) {
+            _dismissedHistory.update { current ->
+                (newRecords + current).distinctBy { it.key }.take(60)
+            }
+        }
+        _notifications.update { current -> current.filterNot { it.key in dismissibleKeySet } }
+
+        if (batchCanceller != null) {
+            batchCanceller?.invoke(dismissibleKeys)
+        } else {
+            dismissibleKeys.forEach { k -> canceller?.invoke(k) }
+        }
+        return dismissible.size
     }
 
     fun cancelAll() {

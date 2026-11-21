@@ -38,7 +38,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -331,16 +333,30 @@ fun PixelTilePill(
                     }
                 }
 
-                // Trailing expander chevron for expandable tiles
-                if (isExpandable && !isEditing) {
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        tint = onPillColor.copy(alpha = if (isActive) 0.75f else 0.50f),
+                // Trailing expander chevron for expandable tiles — tapping opens detail chooser
+                if (isExpandable && !isEditing && onLongClick != null) {
+                    Box(
                         modifier = Modifier
-                            .padding(end = 2.dp)
-                            .size(18.dp),
-                    )
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .clickable {
+                                haptics.sheetDetent()
+                                onLongClick()
+                            }
+                            .semantics {
+                                role = Role.Button
+                                contentDescription = "${tile.label} options"
+                            }
+                            .testTag("tile_chevron_${tile.id}"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = onPillColor.copy(alpha = if (isActive) 0.85f else 0.60f),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
             }
         }

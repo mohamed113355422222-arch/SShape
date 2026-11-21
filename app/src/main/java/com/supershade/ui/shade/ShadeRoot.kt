@@ -19,8 +19,6 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -45,13 +43,21 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -59,35 +65,27 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.displayCutoutPadding
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.supershade.overlay.TopSwipeGestureHelper
 import com.supershade.settings.SplitGestureMode
 import com.supershade.ui.theme.BackdropTheme
 import com.supershade.ui.theme.LocalBackdropTheme
@@ -97,6 +95,7 @@ import com.supershade.ui.theme.LocalShadeTheme
 import com.supershade.ui.theme.ShadeShapeScheme
 import com.supershade.ui.theme.getCardBorder
 import com.supershade.viewmodel.ShadePanel
+import com.supershade.viewmodel.ShadeTransitionEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -108,9 +107,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.supershade.domain.notification.model.ShadeCategory
@@ -121,9 +120,8 @@ import com.supershade.ui.theme.PixelShadeTheme
 import com.supershade.ui.theme.PureMaterialShadeTheme
 import com.supershade.ui.theme.ShadeTheme
 import com.supershade.viewmodel.ShadeViewModel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 @Composable
 fun ShadeRoot(
@@ -198,17 +196,25 @@ fun ShadeRoot(
     }
 
     val coroutineScope = rememberCoroutineScope()
-    val dragOffset = remember { Animatable(0f) }
-    val horizontalPanOffset = remember { Animatable(0f) }
+    // Collect interactive gesture flows as State<T> objects (not delegated) and read .value only inside
+    // graphicsLayer / drawBehind lambdas so drag frames never trigger recomposition or relayout.
+    val gestureProgressState = viewModel.gestureProgress.collectAsStateWithLifecycle()
+    val isGestureDraggingState = viewModel.isGestureDragging.collectAsStateWithLifecycle()
+    val revealAnimatable = remember { Animatable(0f) }
+    val progressProvider: () -> Float = remember {
+        {
+            if (isGestureDraggingState.value) gestureProgressState.value else revealAnimatable.value
+        }
+    }
+
     val density = LocalDensity.current
     val screenHeightDp = LocalConfiguration.current.screenHeightDp.dp
     val screenHeightPx = with(density) { screenHeightDp.toPx() }.coerceAtLeast(1f)
-    val dismissThresholdPx = with(density) { 96.dp.toPx() }
-    val velocityThresholdPxPerSec = with(density) { 850.dp.toPx() }
-    val maxHorizontalPanPx = with(density) { 60.dp.toPx() }
+    val revealDistancePx = remember(screenHeightPx, density) {
+        TopSwipeGestureHelper.computeRevealDistancePx(screenHeightPx.toInt(), density.density)
+    }
 
     var openTimeMs by remember { mutableStateOf(System.currentTimeMillis()) }
-    var isSettled by remember { mutableStateOf(false) }
 
     val pagerState = rememberPagerState(
         initialPage = if (state.activePanel == ShadePanel.QUICK_SETTINGS) 1 else 0,
@@ -252,29 +258,80 @@ fun ShadeRoot(
         }
     }
 
-    // Reset drag position and editing state whenever the shade re-opens or closes.
+    // Drive smooth open/close springs directly from interactive drag releases and close requests.
+    LaunchedEffect(viewModel) {
+        launch {
+            viewModel.gestureProgress.collect { p ->
+                if (viewModel.isGestureDragging.value) {
+                    revealAnimatable.snapTo(p)
+                }
+            }
+        }
+        launch {
+            viewModel.transitionEvent.collectLatest { event ->
+                when (event) {
+                    is ShadeTransitionEvent.FinishOpen -> {
+                        revealAnimatable.snapTo(event.progress.coerceIn(0f, 1.06f))
+                        revealAnimatable.animateTo(
+                            targetValue = 1f,
+                            animationSpec = spring(
+                                dampingRatio = 0.86f,
+                                stiffness = 460f,
+                            ),
+                            initialVelocity = event.velocity.coerceIn(0f, 12f),
+                        )
+                    }
+                    is ShadeTransitionEvent.FinishClose -> {
+                        val startP = if (event.progress > 0.001f) event.progress else revealAnimatable.value
+                        revealAnimatable.snapTo(startP.coerceIn(0f, 1.06f))
+                        if (revealAnimatable.value > 0.001f) {
+                            revealAnimatable.animateTo(
+                                targetValue = 0f,
+                                animationSpec = spring(
+                                    dampingRatio = 0.94f,
+                                    stiffness = 560f,
+                                ),
+                                initialVelocity = event.velocity.coerceIn(-12f, 2f),
+                            )
+                        }
+                        if (!viewModel.isGestureDragging.value) {
+                            onDismiss()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sync programmatic opens (e.g. cold open before transition collector started) and resets on close.
     LaunchedEffect(state.isOpen) {
         if (state.isOpen) {
-            isSettled = false
             openTimeMs = System.currentTimeMillis()
-            dragOffset.snapTo(0f)
-            horizontalPanOffset.snapTo(0f)
-            delay(400L)
-            isSettled = true
+            if (!viewModel.isGestureDragging.value && revealAnimatable.value <= 0.001f && !revealAnimatable.isRunning) {
+                revealAnimatable.animateTo(
+                    targetValue = 1f,
+                    animationSpec = spring(dampingRatio = 0.86f, stiffness = 460f),
+                )
+            }
         } else {
-            isSettled = false
             isEditingTiles = false
+            revealAnimatable.snapTo(0f)
         }
     }
 
     val isTogether = state.splitGestureMode.isTogether
     val activePanel = state.activePanel
 
-    val nestedScrollConnection = remember(isTogether, isQsExpanded, activePanel, isEditingTiles) {
+    val nestedScrollConnection = remember(isTogether, isQsExpanded, activePanel, isEditingTiles, revealDistancePx) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (isEditingTiles) return Offset.Zero
                 val dy = available.y
+                if (revealAnimatable.value < 0.999f && dy > 0f) {
+                    val next = (revealAnimatable.value + dy / revealDistancePx).coerceIn(0f, 1.06f)
+                    coroutineScope.launch { revealAnimatable.snapTo(next) }
+                    return Offset(0f, dy)
+                }
                 // Swiping UP in Together mode while Quick Settings is expanded:
                 if (dy < -12f && isTogether && isQsExpanded) {
                     haptics.sheetDetent()
@@ -293,6 +350,12 @@ fun ShadeRoot(
                     viewModel.setQsExpanded(true)
                     return Offset(0f, dy)
                 }
+                // Overscrolling upward past list bottom smoothly collapses the shade
+                if (source == NestedScrollSource.UserInput && dy < 0f) {
+                    val next = (revealAnimatable.value + dy / revealDistancePx).coerceIn(0f, 1.06f)
+                    coroutineScope.launch { revealAnimatable.snapTo(next) }
+                    return Offset(0f, dy)
+                }
                 return Offset.Zero
             }
 
@@ -301,8 +364,28 @@ fun ShadeRoot(
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                if (dragOffset.value < 0f) {
-                    dragOffset.animateTo(0f, spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow))
+                val progressVelocity = (available.y / revealDistancePx).coerceIn(-12f, 12f)
+                val p = revealAnimatable.value
+                if (p < 0.999f || progressVelocity < -2.2f) {
+                    val shouldClose = p < 0.72f || (progressVelocity < -1.25f && p < 0.98f)
+                    if (shouldClose) {
+                        haptics.sheetDetent()
+                        revealAnimatable.animateTo(
+                            targetValue = 0f,
+                            animationSpec = spring(dampingRatio = 0.94f, stiffness = 560f),
+                            initialVelocity = progressVelocity.coerceIn(-12f, -1.5f),
+                        )
+                        onDismiss()
+                    } else {
+                        revealAnimatable.animateTo(
+                            targetValue = 1f,
+                            animationSpec = spring(dampingRatio = 0.84f, stiffness = 440f),
+                            initialVelocity = progressVelocity.coerceIn(-2f, 12f),
+                        )
+                    }
+                    return available
+                } else if (p > 1.001f) {
+                    revealAnimatable.animateTo(1f, spring(dampingRatio = 0.84f, stiffness = 440f))
                 }
                 return Velocity.Zero
             }
@@ -328,13 +411,39 @@ fun ShadeRoot(
             haptics.sheetDetent()
             viewModel.setQsExpanded(false)
         } else {
-            // Swallow back presses during the initial 350ms settle window to avoid
-            // closing when system shade dismissal injects a back event.
-            if (System.currentTimeMillis() - openTimeMs < 350L) return@BackHandler
+            if (System.currentTimeMillis() - openTimeMs < 200L) return@BackHandler
             haptics.sheetDetent()
-            coroutineScope.launch {
-                dragOffset.animateTo(-screenHeightPx, tween(180))
-                onDismiss()
+            viewModel.requestAnimatedClose()
+        }
+    }
+
+    val revealClipShape = remember {
+        object : Shape {
+            override fun createOutline(
+                size: Size,
+                layoutDirection: LayoutDirection,
+                density: Density,
+            ): Outline {
+                val p = progressProvider().coerceIn(0f, 1.06f)
+                val visualP = p.coerceIn(0f, 1f)
+                if (visualP >= 0.999f) {
+                    return Outline.Rectangle(Rect(0f, 0f, size.width, size.height))
+                }
+                val revealedHeight = (size.height * visualP).coerceAtLeast(0f)
+                val cornerT = 1f - ((visualP - 0.84f) / 0.16f).coerceIn(0f, 1f)
+                val bottomRadiusPx = with(density) { 34.dp.toPx() } * cornerT
+                return Outline.Rounded(
+                    RoundRect(
+                        left = 0f,
+                        top = 0f,
+                        right = size.width,
+                        bottom = revealedHeight,
+                        topLeftCornerRadius = CornerRadius.Zero,
+                        topRightCornerRadius = CornerRadius.Zero,
+                        bottomLeftCornerRadius = CornerRadius(bottomRadiusPx, bottomRadiusPx),
+                        bottomRightCornerRadius = CornerRadius(bottomRadiusPx, bottomRadiusPx),
+                    )
+                )
             }
         }
     }
@@ -347,43 +456,39 @@ fun ShadeRoot(
     ) {
         themeWrapper {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Dimmer scrim — tapping it dismisses the shade.
-                // In AOSP/OneUI, scrim smoothly fades out in real time as the shade is pulled up.
                 val opacity = state.backdropOpacity.coerceIn(0.20f, 1.00f)
                 val baseScrimAlpha = when {
                     opacity >= 0.99f -> 0.70f
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> (opacity * 0.36f).coerceIn(0.12f, 0.45f)
                     else -> (opacity * 0.65f).coerceIn(0.25f, 0.75f)
                 }
-                val dragFraction = (kotlin.math.abs(dragOffset.value) / screenHeightPx).coerceIn(0f, 1f)
-                // One UI 9 cosine scrim attenuation curve: preserves visual focus before wallpaper reveal
-                val cosineFactor = kotlin.math.cos((Math.PI / 2.0) * Math.pow(dragFraction.toDouble(), 1.35)).toFloat()
-                val liveScrimAlpha = (baseScrimAlpha * cosineFactor * cosineFactor).coerceIn(0f, 1f)
-                val panelScale = (1f - 0.075f * Math.pow(dragFraction.toDouble(), 1.25).toFloat()).coerceIn(0.92f, 1f)
 
+                // Scrim fades proportionally with progress in Draw phase without recomposing children.
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = liveScrimAlpha))
+                        .drawBehind {
+                            val p = progressProvider().coerceIn(0f, 1f)
+                            val eased = p * p * (3f - 2f * p)
+                            val liveScrimAlpha = (baseScrimAlpha * eased).coerceIn(0f, 1f)
+                            if (liveScrimAlpha > 0.002f) {
+                                drawRect(Color.Black.copy(alpha = liveScrimAlpha))
+                            }
+                        }
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            enabled = isSettled,
                             onClick = {
-                                if (isSettled && dragOffset.value == 0f) {
+                                if (!isGestureDraggingState.value && progressProvider() > 0.35f) {
                                     haptics.lightTap()
-                                    onDismiss()
+                                    viewModel.requestAnimatedClose()
                                 }
                             }
                         ),
                 )
 
-                // Shade panel: expands down from the top, rounded bottom corners, frosted glass backdrop
-                AnimatedVisibility(
-                    visible = state.isOpen,
-                    enter = slideInVertically(spring(dampingRatio = 0.78f, stiffness = 420f)) { -it } + fadeIn(tween(180)),
-                    exit  = slideOutVertically(spring(dampingRatio = 0.85f, stiffness = 460f)) { -it } + fadeOut(tween(160)),
-                ) {
+                // Pre-warmed shade panel: revealed progressively from the top edge with GPU layer transforms.
+                run {
                     val glassBackdrop = when {
                         opacity >= 0.99f -> {
                             if (isAmoled) Color(0xFF000000) else MaterialTheme.colorScheme.surface
@@ -398,28 +503,30 @@ fun ShadeRoot(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .offset { IntOffset(0, dragOffset.value.roundToInt()) }
                             .graphicsLayer {
-                                scaleX = panelScale
-                                scaleY = panelScale
+                                val p = progressProvider().coerceIn(0f, 1.06f)
+                                val visualP = p.coerceIn(0f, 1f)
+                                val overPull = (p - 1f).coerceAtLeast(0f)
+                                val s = (0.95f + 0.05f * visualP + overPull * 0.03f).coerceIn(0.94f, 1.025f)
+                                scaleX = s
+                                scaleY = s
                                 transformOrigin = TransformOrigin(0.5f, 0f)
+                                translationY = -(1f - visualP) * (size.height * 0.035f) + overPull * 12.dp.toPx()
+                                alpha = (visualP / 0.14f).coerceIn(0f, 1f)
+                                shape = revealClipShape
+                                clip = visualP < 0.999f
                             }
                             .background(glassBackdrop)
-                            .pointerInput(isQsExpanded, isEditingTiles, isTogether, state.activePanel, state.visibleNotifications.size) {
+                            .pointerInput(isQsExpanded, isEditingTiles, isTogether, state.activePanel, state.visibleNotifications.size, revealDistancePx) {
                                 if (isEditingTiles) return@pointerInput
                                 val px = this.density
-                                val edgeZonePx = (28f * px).toInt()
+                                val edgeZonePx = (20f * px).toInt()
                                 val headerZonePx = (72f * px).toInt()
                                 val bottomHomeZonePx = (80f * px).toInt()
-                                val minSwipeUp = (110f * px).toInt()
                                 val slopeMin = 0.55f
 
                                 awaitEachGesture {
                                     val down = awaitFirstDown(requireUnconsumed = false)
-                                    // Ignore touches that began during the initial 400ms settle window to avoid catching the opening swipe
-                                    if (System.currentTimeMillis() - openTimeMs < 400L) {
-                                        return@awaitEachGesture
-                                    }
                                     var consumed = false
                                     var lastY = down.position.y
                                     var totalDy = 0f
@@ -429,7 +536,6 @@ fun ShadeRoot(
 
                                     val isTouchInHomeBarZone = down.position.y >= (size.height - bottomHomeZonePx)
                                     val hasNotifications = state.visibleNotifications.isNotEmpty()
-                                    // Touch is over scrollable feed only if outside top header and bottom home bar zone
                                     val isTouchOverScrollableFeed = !isTouchInHomeBarZone &&
                                                                     down.position.y >= headerZonePx &&
                                                                     down.position.y <= (size.height - bottomHomeZonePx) &&
@@ -445,100 +551,88 @@ fun ShadeRoot(
                                         val deltaY = change.position.y - lastY
                                         lastY = change.position.y
 
-                                        // Side edge inward swipe (AOSP / One UI predictive back navigation)
-                                        // Strictly requires dominant horizontal swipe to prevent accidental trigger while scrolling
+                                        // Side edge inward swipe (predictive back)
                                         val isHorizontalDominant = kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.6f
                                         val isEdgeInwardDist = (down.position.x < edgeZonePx && dx > (42f * px)) ||
                                                                (down.position.x > (size.width - edgeZonePx) && dx < -(42f * px))
                                         val isInwardSwipe = isHorizontalDominant && isEdgeInwardDist && kotlin.math.abs(dy) < (40f * px)
 
-                                        if (!consumed && isInwardSwipe) {
+                                        if (!consumed && !isTouchOverScrollableFeed && isInwardSwipe) {
                                             change.consume()
                                             consumed = true
                                             haptics.sheetDetent()
                                             if (isTogether && isQsExpanded) {
                                                 coroutineScope.launch { viewModel.setQsExpanded(false) }
                                             } else {
-                                                coroutineScope.launch {
-                                                    dragOffset.animateTo(-screenHeightPx, tween(180))
-                                                    onDismiss()
-                                                }
+                                                viewModel.requestAnimatedClose()
                                             }
                                             break
                                         }
 
-                                        // Vertical dismiss drag tracking:
-                                        // Active when touch started in bottom home zone, header zone, or empty state
                                         if (!isTouchOverScrollableFeed) {
                                             val isDominantVertical = isTouchInHomeBarZone || kotlin.math.abs(dy) > kotlin.math.abs(dx) * slopeMin
-                                            if (isDominantVertical && (dy < -4f || dy > 4f || dragOffset.value != 0f)) {
+                                            if (isDominantVertical && (dy < -4f || dy > 4f || revealAnimatable.value < 0.999f)) {
                                                 totalDy = dy
-                                                val currentVal = dragOffset.value
-                                                val nextVal = if (deltaY > 0f && currentVal >= 0f) {
-                                                    // Downward rubber-banding when pulled past resting position
-                                                    (currentVal + deltaY * 0.32f).coerceIn(0f, 64f * px)
+                                                val currentP = revealAnimatable.value
+                                                val deltaP = deltaY / revealDistancePx
+                                                val nextP = if (deltaY > 0f && currentP >= 1f) {
+                                                    (currentP + deltaP * 0.25f).coerceIn(1f, 1.06f)
                                                 } else {
-                                                    // Live 1:1 tracking upward towards dismiss or returning down
-                                                    (currentVal + deltaY).coerceAtMost(64f * px)
+                                                    (currentP + deltaP).coerceIn(0f, 1.06f)
                                                 }
-                                                val threshold = if (isTouchInHomeBarZone) 36f * px else dismissThresholdPx
-                                                if (nextVal < -threshold && !hasFiredDismissThresholdHaptic) {
+                                                val thresholdP = if (isTouchInHomeBarZone) 0.85f else 0.72f
+                                                if (nextP < thresholdP && !hasFiredDismissThresholdHaptic) {
                                                     haptics.sheetDetent()
                                                     hasFiredDismissThresholdHaptic = true
-                                                } else if (nextVal >= -threshold * 0.8f) {
+                                                } else if (nextP >= thresholdP + 0.06f) {
                                                     hasFiredDismissThresholdHaptic = false
                                                 }
                                                 coroutineScope.launch {
-                                                    dragOffset.snapTo(nextVal)
+                                                    revealAnimatable.snapTo(nextP)
                                                 }
                                             }
 
                                             if (!change.pressed) {
-                                                val velocity = tracker.calculateVelocity().y
-                                                val isFlingUp = if (isTouchInHomeBarZone) {
-                                                    velocity < -360f * px && (totalDy < -(10f * px) || dragOffset.value < -(10f * px))
-                                                } else {
-                                                    velocity < -velocityThresholdPxPerSec && (totalDy < -(18f * px) || dragOffset.value < -(18f * px))
-                                                }
-                                                val isPulledPastThreshold = if (isTouchInHomeBarZone) {
-                                                    dragOffset.value < -(32f * px) || -totalDy >= (32f * px)
-                                                } else {
-                                                    dragOffset.value < -dismissThresholdPx || -totalDy >= minSwipeUp
-                                                }
+                                                val velocityY = tracker.calculateVelocity().y
+                                                val progressVelocity = (velocityY / revealDistancePx).coerceIn(-12f, 12f)
+                                                val p = revealAnimatable.value
+                                                val thresholdP = if (isTouchInHomeBarZone) 0.85f else 0.72f
+                                                val minFlickVel = if (isTouchInHomeBarZone) -0.85f else -1.25f
+                                                val shouldClose = (p < thresholdP) ||
+                                                    (progressVelocity < minFlickVel && p < 0.98f && totalDy < -(8f * px))
 
-                                                if (isFlingUp || isPulledPastThreshold) {
+                                                if (shouldClose) {
                                                     consumed = true
                                                     change.consume()
-                                                    if (!isTouchInHomeBarZone && isTogether && isQsExpanded && velocity > -1600f * px && dragOffset.value > -screenHeightPx * 0.35f) {
+                                                    if (!isTouchInHomeBarZone && isTogether && isQsExpanded && progressVelocity > -2.5f && p > 0.65f) {
                                                         haptics.sheetDetent()
                                                         coroutineScope.launch {
                                                             viewModel.setQsExpanded(false)
-                                                            dragOffset.animateTo(0f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMediumLow))
+                                                            revealAnimatable.animateTo(1f, spring(dampingRatio = 0.84f, stiffness = 440f))
                                                         }
                                                     } else {
                                                         haptics.sheetDetent()
                                                         coroutineScope.launch {
-                                                            dragOffset.animateTo(
-                                                                targetValue = -screenHeightPx,
-                                                                animationSpec = spring(dampingRatio = 0.88f, stiffness = 480f),
-                                                                initialVelocity = velocity.coerceIn(-5000f * px, -600f * px),
+                                                            revealAnimatable.animateTo(
+                                                                targetValue = 0f,
+                                                                animationSpec = spring(dampingRatio = 0.94f, stiffness = 560f),
+                                                                initialVelocity = progressVelocity.coerceIn(-12f, -1.5f),
                                                             )
                                                             onDismiss()
                                                         }
                                                     }
-                                                } else if (dragOffset.value > 0f) {
+                                                } else if (kotlin.math.abs(p - 1f) > 0.001f) {
                                                     coroutineScope.launch {
-                                                        dragOffset.animateTo(0f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMediumLow))
-                                                    }
-                                                } else if (dragOffset.value < 0f) {
-                                                    coroutineScope.launch {
-                                                        dragOffset.animateTo(0f, spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow))
+                                                        revealAnimatable.animateTo(
+                                                            targetValue = 1f,
+                                                            animationSpec = spring(dampingRatio = 0.84f, stiffness = 440f),
+                                                            initialVelocity = progressVelocity.coerceIn(-2f, 12f),
+                                                        )
                                                     }
                                                 }
                                                 break
                                             }
                                         } else {
-                                            // When touching inside scrollable feed, allow child views to handle scroll entirely
                                             if (!change.pressed) {
                                                 break
                                             }
@@ -839,6 +933,7 @@ fun ShadeRoot(
                                     TogetherNotificationFeed(
                                         notifications = state.visibleNotifications,
                                         onDismiss = { viewModel.dismissNotification(it) },
+                                        onDismissGroup = { viewModel.dismissNotifications(it) },
                                         onClearAll = { viewModel.clearAllNotifications() },
                                         onNotificationClick = { notification ->
                                             viewModel.launchNotification(notification)
@@ -942,6 +1037,7 @@ fun ShadeRoot(
                                         NotificationFeed(
                                             notifications = state.visibleNotifications,
                                             onDismiss = { viewModel.dismissNotification(it) },
+                                            onDismissGroup = { viewModel.dismissNotifications(it) },
                                             onClearAll = { viewModel.clearAllNotifications() },
                                             onNotificationClick = { notification ->
                                                 viewModel.launchNotification(notification)
@@ -1205,22 +1301,8 @@ fun ShadeRoot(
                             }
                         }
 
-                        // Bottom drag-handle — swipe up to dismiss with spring physics, or tap for fast quick-close
+                        // Bottom drag-handle — swipe up to dismiss progressively with spring physics, or tap for animated quick-close
                         var hasHandleFiredHaptic by remember { mutableStateOf(false) }
-                        val handlePullProgress = (-dragOffset.value / dismissThresholdPx).coerceIn(0f, 1.5f)
-                        val animatedHandleWidth by animateDpAsState(
-                            targetValue = (44 + 24 * handlePullProgress).dp,
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = Spring.StiffnessMediumLow,
-                            ),
-                            label = "handleWidth",
-                        )
-                        val animatedHandleAlpha by animateFloatAsState(
-                            targetValue = (0.40f + 0.35f * handlePullProgress).coerceIn(0.40f, 0.85f),
-                            animationSpec = tween(120),
-                            label = "handleAlpha",
-                        )
 
                         Box(
                             modifier = Modifier
@@ -1228,46 +1310,43 @@ fun ShadeRoot(
                                 .defaultMinSize(minHeight = 52.dp)
                                 .clickable {
                                     haptics.sheetDetent()
-                                    coroutineScope.launch {
-                                        dragOffset.animateTo(-screenHeightPx, tween(180))
-                                        onDismiss()
-                                    }
+                                    viewModel.requestAnimatedClose()
                                 }
                                 .padding(vertical = 10.dp)
                                 .draggable(
                                     orientation = Orientation.Vertical,
-                                    enabled = isSettled && !isEditingTiles,
+                                    enabled = !isEditingTiles,
                                     state = rememberDraggableState { delta ->
                                         coroutineScope.launch {
-                                            val next = (dragOffset.value + delta).coerceAtMost(0f)
-                                            if (next < -dismissThresholdPx && !hasHandleFiredHaptic) {
+                                            val nextP = (revealAnimatable.value + delta / revealDistancePx).coerceIn(0f, 1.02f)
+                                            if (nextP < 0.85f && !hasHandleFiredHaptic) {
                                                 haptics.sheetDetent()
                                                 hasHandleFiredHaptic = true
-                                            } else if (next >= -dismissThresholdPx * 0.8f) {
+                                            } else if (nextP >= 0.90f) {
                                                 hasHandleFiredHaptic = false
                                             }
-                                            dragOffset.snapTo(next)
+                                            revealAnimatable.snapTo(nextP)
                                         }
                                     },
                                     onDragStopped = { velocity ->
                                         hasHandleFiredHaptic = false
+                                        val progressVelocity = (velocity / revealDistancePx).coerceIn(-12f, 12f)
+                                        val p = revealAnimatable.value
                                         coroutineScope.launch {
-                                            if (dragOffset.value < -dismissThresholdPx ||
-                                                (velocity < -velocityThresholdPxPerSec && dragOffset.value < -(16f * density.density))
-                                            ) {
+                                            if (p < 0.85f || (progressVelocity < -0.85f && p < 0.99f)) {
                                                 haptics.sheetDetent()
-                                                dragOffset.animateTo(
-                                                    targetValue = -screenHeightPx,
-                                                    animationSpec = spring(dampingRatio = 0.88f, stiffness = 480f),
-                                                    initialVelocity = velocity.coerceIn(-5000f * density.density, -600f * density.density),
+                                                revealAnimatable.animateTo(
+                                                    targetValue = 0f,
+                                                    animationSpec = spring(dampingRatio = 0.94f, stiffness = 560f),
+                                                    initialVelocity = progressVelocity.coerceIn(-12f, -1.5f),
                                                 )
                                                 onDismiss()
                                             } else {
-                                                dragOffset.animateTo(
-                                                    targetValue = 0f,
+                                                revealAnimatable.animateTo(
+                                                    targetValue = 1f,
                                                     animationSpec = spring(
-                                                        dampingRatio = 0.82f,
-                                                        stiffness = 460f,
+                                                        dampingRatio = 0.84f,
+                                                        stiffness = 440f,
                                                     ),
                                                 )
                                             }
@@ -1276,12 +1355,18 @@ fun ShadeRoot(
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
+                            val handleColor = MaterialTheme.colorScheme.onSurfaceVariant
                             Box(
                                 modifier = Modifier
-                                    .width(animatedHandleWidth)
+                                    .width(44.dp)
                                     .height(5.dp)
+                                    .graphicsLayer {
+                                        val pull = (1f - progressProvider().coerceIn(0f, 1f)).coerceIn(0f, 1f)
+                                        scaleX = 1f + 0.55f * pull
+                                        alpha = (0.45f + 0.45f * pull).coerceIn(0.45f, 0.95f)
+                                    }
                                     .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = animatedHandleAlpha)),
+                                    .background(handleColor),
                             )
                         }
                     }
@@ -1316,6 +1401,17 @@ fun ShadeRoot(
                         onToggleDnd = { viewModel.toggleDndInDetail() },
                         onSetDndDuration = { viewModel.setDndDuration(it) },
                         onToggleHotspot = { viewModel.toggleHotspotInDetail() },
+                        onToggleWifi = { viewModel.toggleWifiInDetail() },
+                        onRefreshWifi = { viewModel.refreshWifiNetworks(triggerScan = true) },
+                        onConnectWifi = { network, pass -> viewModel.connectWifiInDetail(network, pass) },
+                        onOpenWifiPanel = { viewModel.openWifiPanelFromDetail() },
+                        onOpenWifiPermissions = { viewModel.openWifiPermissionsFromDetail() },
+                        onToggleBluetooth = { viewModel.toggleBluetoothInDetail() },
+                        onRefreshBluetooth = { scanNearby -> viewModel.refreshBluetoothDevices(scanNearby = scanNearby) },
+                        onConnectBluetoothDevice = { device -> viewModel.connectBluetoothDeviceInDetail(device) },
+                        onPairNewBluetooth = { viewModel.openBluetoothPairFromDetail() },
+                        onOpenMediaOutput = { viewModel.openMediaOutputFromDetail() },
+                        onOpenBluetoothPermissions = { viewModel.openBluetoothPermissionsFromDetail() },
                     )
                 }
             }

@@ -2,6 +2,7 @@ package com.supershade.ui.shade
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -20,63 +21,81 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothConnected
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.FlashlightOff
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiLock
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,9 +110,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.roundToInt
 import com.supershade.haptics.LocalSuperHaptics
 import com.supershade.haptics.SuperHaptics
-import com.supershade.ui.theme.getCardBorder
+import com.supershade.viewmodel.BluetoothDeviceCategory
+import com.supershade.viewmodel.BluetoothDeviceItem
 import com.supershade.viewmodel.TileDetailState
 import com.supershade.viewmodel.TileDetailType
+import com.supershade.viewmodel.WifiNetworkItem
 
 @Composable
 fun QuickTileDetailSheet(
@@ -106,6 +127,17 @@ fun QuickTileDetailSheet(
     onToggleDnd: () -> Unit = {},
     onSetDndDuration: (Int) -> Unit = {},
     onToggleHotspot: () -> Unit = {},
+    onToggleWifi: () -> Unit = {},
+    onRefreshWifi: () -> Unit = {},
+    onConnectWifi: (WifiNetworkItem, String?) -> Unit = { _, _ -> },
+    onOpenWifiPanel: () -> Unit = {},
+    onOpenWifiPermissions: () -> Unit = {},
+    onToggleBluetooth: () -> Unit = {},
+    onRefreshBluetooth: (Boolean) -> Unit = {},
+    onConnectBluetoothDevice: (BluetoothDeviceItem) -> Unit = {},
+    onPairNewBluetooth: () -> Unit = {},
+    onOpenMediaOutput: () -> Unit = {},
+    onOpenBluetoothPermissions: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val haptics = LocalSuperHaptics.current ?: remember(context) { SuperHaptics(context) }
@@ -145,6 +177,7 @@ fun QuickTileDetailSheet(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 600.dp)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -160,8 +193,9 @@ fun QuickTileDetailSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 // Drag handle indicator
                 Box(
@@ -275,19 +309,41 @@ fun QuickTileDetailSheet(
                 }
                 TileDetailType.WIFI -> {
                     WifiDetailContent(
+                        isActive = detailState.isActive,
                         ssid = detailState.wifiSsid ?: "Not Connected",
                         band = detailState.wifiBand ?: "Wi-Fi",
                         ip = detailState.wifiIp ?: "Unknown",
                         speed = detailState.wifiLinkSpeed ?: "Unknown",
                         rssi = detailState.wifiRssi,
+                        networks = detailState.wifiNetworks,
+                        isScanning = detailState.wifiIsScanning,
+                        needsPermission = detailState.wifiNeedsLocationPermission,
+                        statusMessage = detailState.wifiStatusMessage,
                         settingsAction = detailState.settingsAction,
+                        onToggleWifi = onToggleWifi,
+                        onRefresh = onRefreshWifi,
+                        onConnectNetwork = onConnectWifi,
+                        onOpenWifiPanel = onOpenWifiPanel,
+                        onOpenPermissions = onOpenWifiPermissions,
                     )
                 }
                 TileDetailType.BLUETOOTH -> {
                     BluetoothDetailContent(
+                        isActive = detailState.isActive,
                         deviceName = detailState.btDeviceName ?: "Bluetooth",
                         isAudioConnected = detailState.btAudioConnected,
+                        pairedDevices = detailState.btDevices,
+                        nearbyDevices = detailState.btNearbyDevices,
+                        isScanning = detailState.btIsScanning,
+                        needsPermission = detailState.btNeedsPermission,
+                        statusMessage = detailState.btStatusMessage,
                         settingsAction = detailState.settingsAction,
+                        onToggleBluetooth = onToggleBluetooth,
+                        onRefresh = onRefreshBluetooth,
+                        onConnectDevice = onConnectBluetoothDevice,
+                        onPairNewDevice = onPairNewBluetooth,
+                        onOpenMediaOutput = onOpenMediaOutput,
+                        onOpenPermissions = onOpenBluetoothPermissions,
                     )
                 }
                 TileDetailType.SOUND_MODE -> {
@@ -481,15 +537,27 @@ private fun FlashlightDetailContent(
 
 @Composable
 private fun WifiDetailContent(
+    isActive: Boolean,
     ssid: String,
     band: String,
     ip: String,
     speed: String,
     rssi: Int,
+    networks: List<WifiNetworkItem>,
+    isScanning: Boolean,
+    needsPermission: Boolean,
+    statusMessage: String?,
     settingsAction: String?,
+    onToggleWifi: () -> Unit,
+    onRefresh: () -> Unit,
+    onConnectNetwork: (WifiNetworkItem, String?) -> Unit,
+    onOpenWifiPanel: () -> Unit,
+    onOpenPermissions: () -> Unit,
 ) {
     val context = LocalContext.current
     val haptics = LocalSuperHaptics.current ?: remember(context) { SuperHaptics(context) }
+    var promptNetwork by remember { mutableStateOf<WifiNetworkItem?>(null) }
+    var passwordInput by remember { mutableStateOf("") }
 
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -501,7 +569,7 @@ private fun WifiDetailContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -514,7 +582,7 @@ private fun WifiDetailContent(
                         .padding(end = 8.dp),
                 ) {
                     Text(
-                        text = "Connected Network",
+                        text = if (isActive) "Connected Network" else "Wi-Fi",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -525,196 +593,260 @@ private fun WifiDetailContent(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(
-                        text = band,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    IconButton(
+                        onClick = {
+                            haptics.lightTap()
+                            onRefresh()
+                        },
+                        modifier = Modifier.testTag("wifi_refresh_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Scan Wi-Fi networks",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = isActive,
+                        onCheckedChange = {
+                            if (!isActive) haptics.tileToggleOn() else haptics.tileToggleOff()
+                            onToggleWifi()
+                        },
+                        modifier = Modifier.testTag("wifi_detail_switch"),
                     )
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                DetailMetricTile(
-                    icon = Icons.Default.Speed,
-                    label = "Speed",
-                    value = speed,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                DetailMetricTile(
-                    icon = Icons.Default.Router,
-                    label = "IP Address",
-                    value = ip,
-                    modifier = Modifier.weight(1f),
-                )
-                if (rssi != 0 && rssi != -127) {
-                    Spacer(Modifier.width(8.dp))
+            if (isActive && (speed != "Unknown" || ip != "Unknown" || (rssi != 0 && rssi != -127))) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
                     DetailMetricTile(
-                        icon = Icons.Default.NetworkCheck,
-                        label = "Signal",
-                        value = if (rssi >= -60) "Strong" else if (rssi >= -75) "Good" else "Weak",
+                        icon = Icons.Default.Speed,
+                        label = "Speed",
+                        value = speed,
                         modifier = Modifier.weight(1f),
                     )
+                    Spacer(Modifier.width(8.dp))
+                    DetailMetricTile(
+                        icon = Icons.Default.Router,
+                        label = "IP Address",
+                        value = ip,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (rssi != 0 && rssi != -127) {
+                        Spacer(Modifier.width(8.dp))
+                        DetailMetricTile(
+                            icon = Icons.Default.NetworkCheck,
+                            label = "Band",
+                            value = band,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
     }
 
-    FilledTonalButton(
-        onClick = {
-            haptics.lightTap()
-            try {
-                val action = settingsAction ?: Settings.ACTION_WIFI_SETTINGS
-                context.startActivity(Intent(action).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
-            } catch (_: Exception) {}
-        },
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text("Wi-Fi Settings")
-    }
-}
-
-@Composable
-private fun BluetoothDetailContent(
-    deviceName: String,
-    isAudioConnected: Boolean,
-    settingsAction: String?,
-) {
-    val context = LocalContext.current
-    val haptics = LocalSuperHaptics.current ?: remember(context) { SuperHaptics(context) }
-
-    val bondedDevices = remember {
-        try {
-            val bm = context.getSystemService(android.bluetooth.BluetoothManager::class.java)
-            bm?.adapter?.bondedDevices?.toList()?.sortedBy {
-                try { it.name.orEmpty() } catch (_: SecurityException) { "" }
-            } ?: emptyList()
-        } catch (_: SecurityException) {
-            emptyList()
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = getCardBorder(alpha = 0.30f),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
+    if (isScanning) {
+        LinearProgressIndicator(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .height(3.dp)
+                .clip(CircleShape),
+        )
+    }
+
+    if (needsPermission) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+            modifier = Modifier.fillMaxWidth(),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(end = 8.dp),
+                Text(
+                    text = statusMessage ?: "Grant permission to list nearby networks",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                )
+                TextButton(
+                    onClick = {
+                        haptics.lightTap()
+                        onOpenPermissions()
+                    },
+                    modifier = Modifier.testTag("wifi_grant_permission_button"),
                 ) {
-                    Text(
-                        text = "Current Connection",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = deviceName,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isAudioConnected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
-                ) {
-                    Text(
-                        text = if (isAudioConnected) "Audio Endpoint" else "Paired",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = if (isAudioConnected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
+                    Text("Permissions")
                 }
             }
+        }
+    } else if (!statusMessage.isNullOrBlank()) {
+        Text(
+            text = statusMessage,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+    }
 
-            if (bondedDevices.isNotEmpty()) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.20f))
+    // Available & Saved Networks list inside the sheet
+    if (isActive && networks.isNotEmpty()) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = getCardBorder(alpha = 0.30f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "Available Networks (${networks.size})",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "Paired Devices",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    bondedDevices.take(4).forEach { device ->
-                        val dName = try { device.name ?: "Bluetooth Device" } catch (_: SecurityException) { "Bluetooth Device" }
-                        val isCurrent = dName.equals(deviceName, ignoreCase = true)
-                        Surface(
-                            onClick = {
-                                haptics.lightTap()
-                                try {
-                                    val action = settingsAction ?: Settings.ACTION_BLUETOOTH_SETTINGS
-                                    context.startActivity(Intent(action).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
-                                } catch (_: Exception) {}
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surfaceContainerHigh,
-                            border = if (isCurrent) getCardBorder(alpha = 0.40f) else null,
-                            modifier = Modifier.fillMaxWidth(),
+                networks.forEach { net ->
+                    val isPrompting = promptNetwork?.ssid == net.ssid
+                    Surface(
+                        onClick = {
+                            haptics.lightTap()
+                            if (!net.isConnected) {
+                                if (!net.isSecured || net.isSaved) {
+                                    promptNetwork = null
+                                    onConnectNetwork(net, null)
+                                } else {
+                                    promptNetwork = if (isPrompting) null else net
+                                    passwordInput = ""
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (net.isConnected) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.40f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                        },
+                        border = if (net.isConnected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)) else null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("wifi_network_${net.ssid}"),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 Icon(
-                                    imageVector = if (isAudioConnected && isCurrent) Icons.Default.Headphones else Icons.Default.Bluetooth,
+                                    imageVector = if (net.isSecured) Icons.Default.WifiLock else Icons.Default.Wifi,
                                     contentDescription = null,
-                                    tint = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp),
+                                    tint = if (net.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp),
                                 )
-                                Text(
-                                    text = dName,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                        fontSize = 13.5.sp,
-                                    ),
-                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                if (isCurrent) {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "Connected",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                        color = MaterialTheme.colorScheme.primary,
+                                        text = net.ssid,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = if (net.isConnected) FontWeight.Bold else FontWeight.Medium,
+                                        ),
+                                        color = if (net.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
+                                    val meta = buildList {
+                                        if (net.isConnected) add("Connected")
+                                        else if (net.isSaved) add("Saved")
+                                        if (net.bandLabel.isNotEmpty()) add(net.bandLabel)
+                                        if (net.security.isNotEmpty() && net.security != "Connected") add(net.security)
+                                    }.joinToString(" • ")
+                                    if (meta.isNotEmpty()) {
+                                        Text(
+                                            text = meta,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                if (net.isConnected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Connected",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                } else if (net.isSecured) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Secured",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
+                            }
+
+                            AnimatedVisibility(visible = isPrompting) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = passwordInput,
+                                        onValueChange = { passwordInput = it },
+                                        label = { Text("Password for ${net.ssid}") },
+                                        singleLine = true,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("wifi_password_input_${net.ssid}"),
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        TextButton(
+                                            onClick = {
+                                                promptNetwork = null
+                                                passwordInput = ""
+                                            }
+                                        ) {
+                                            Text("Cancel")
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        Button(
+                                            onClick = {
+                                                haptics.tileToggleOn()
+                                                onConnectNetwork(net, passwordInput)
+                                                promptNetwork = null
+                                                passwordInput = ""
+                                            },
+                                            enabled = passwordInput.length >= 8,
+                                            modifier = Modifier.testTag("wifi_connect_confirm_${net.ssid}"),
+                                        ) {
+                                            Text("Connect")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -731,44 +863,379 @@ private fun BluetoothDetailContent(
         FilledTonalButton(
             onClick = {
                 haptics.lightTap()
+                onOpenWifiPanel()
+            },
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .weight(1f)
+                .testTag("wifi_panel_button"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Wifi,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Internet Panel", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+
+        OutlinedButton(
+            onClick = {
+                haptics.lightTap()
                 try {
-                    val action = settingsAction ?: Settings.ACTION_BLUETOOTH_SETTINGS
+                    val action = settingsAction ?: Settings.ACTION_WIFI_SETTINGS
                     context.startActivity(Intent(action).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
                 } catch (_: Exception) {}
             },
             shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .testTag("wifi_settings_button"),
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
             )
-            Spacer(Modifier.width(8.dp))
-            Text("Bluetooth Settings")
+            Spacer(Modifier.width(6.dp))
+            Text("Settings", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun BluetoothDetailContent(
+    isActive: Boolean,
+    deviceName: String,
+    isAudioConnected: Boolean,
+    pairedDevices: List<BluetoothDeviceItem>,
+    nearbyDevices: List<BluetoothDeviceItem>,
+    isScanning: Boolean,
+    needsPermission: Boolean,
+    statusMessage: String?,
+    settingsAction: String?,
+    onToggleBluetooth: () -> Unit,
+    onRefresh: (Boolean) -> Unit,
+    onConnectDevice: (BluetoothDeviceItem) -> Unit,
+    onPairNewDevice: () -> Unit,
+    onOpenMediaOutput: () -> Unit,
+    onOpenPermissions: () -> Unit,
+) {
+    val context = LocalContext.current
+    val haptics = LocalSuperHaptics.current ?: remember(context) { SuperHaptics(context) }
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = getCardBorder(alpha = 0.30f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp),
+                ) {
+                    Text(
+                        text = if (isActive) "Bluetooth" else "Bluetooth Off",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = deviceName,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    IconButton(
+                        onClick = {
+                            haptics.lightTap()
+                            onRefresh(true)
+                        },
+                        modifier = Modifier.testTag("bt_refresh_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Scan for Bluetooth devices",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = isActive,
+                        onCheckedChange = {
+                            if (!isActive) haptics.tileToggleOn() else haptics.tileToggleOff()
+                            onToggleBluetooth()
+                        },
+                        modifier = Modifier.testTag("bt_detail_switch"),
+                    )
+                }
+            }
+        }
+    }
+
+    if (isScanning) {
+        LinearProgressIndicator(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .clip(CircleShape),
+        )
+    }
+
+    if (needsPermission) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = statusMessage ?: "Grant Bluetooth permission to list paired devices",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                )
+                TextButton(
+                    onClick = {
+                        haptics.lightTap()
+                        onOpenPermissions()
+                    },
+                    modifier = Modifier.testTag("bt_grant_permission_button"),
+                ) {
+                    Text("Permissions")
+                }
+            }
+        }
+    } else if (!statusMessage.isNullOrBlank()) {
+        Text(
+            text = statusMessage,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+    }
+
+    if (isActive && pairedDevices.isNotEmpty()) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = getCardBorder(alpha = 0.30f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "Paired Devices (${pairedDevices.size})",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                pairedDevices.forEach { dev ->
+                    BluetoothDeviceRow(
+                        device = dev,
+                        onClick = {
+                            haptics.lightTap()
+                            onConnectDevice(dev)
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    if (isActive && nearbyDevices.isNotEmpty()) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = getCardBorder(alpha = 0.30f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "Available Nearby (${nearbyDevices.size})",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                nearbyDevices.forEach { dev ->
+                    BluetoothDeviceRow(
+                        device = dev,
+                        onClick = {
+                            haptics.lightTap()
+                            onPairNewDevice()
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilledTonalButton(
+            onClick = {
+                haptics.lightTap()
+                onPairNewDevice()
+            },
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .weight(1f)
+                .testTag("bt_pair_button"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Pair New", maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
 
         if (isAudioConnected) {
             OutlinedButton(
                 onClick = {
                     haptics.sheetDetent()
-                    try {
-                        val intent = Intent("com.android.settings.panel.action.MEDIA_OUTPUT").apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        context.startActivity(intent)
-                    } catch (_: Exception) {}
+                    onOpenMediaOutput()
                 },
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("bt_media_output_button"),
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.VolumeUp,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp),
                 )
-                Spacer(Modifier.width(8.dp))
-                Text("Media Output")
+                Spacer(Modifier.width(6.dp))
+                Text("Media Output", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        } else {
+            OutlinedButton(
+                onClick = {
+                    haptics.lightTap()
+                    try {
+                        val action = settingsAction ?: Settings.ACTION_BLUETOOTH_SETTINGS
+                        context.startActivity(Intent(action).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
+                    } catch (_: Exception) {}
+                },
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("bt_settings_button"),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Settings", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
+private fun BluetoothDeviceRow(
+    device: BluetoothDeviceItem,
+    onClick: () -> Unit,
+) {
+    val icon = when (device.category) {
+        BluetoothDeviceCategory.HEADPHONES -> Icons.Default.Headphones
+        BluetoothDeviceCategory.SPEAKER -> Icons.Default.Speaker
+        BluetoothDeviceCategory.WATCH -> Icons.Default.Watch
+        BluetoothDeviceCategory.CAR -> Icons.Default.DirectionsCar
+        BluetoothDeviceCategory.INPUT -> Icons.Default.Keyboard
+        BluetoothDeviceCategory.PHONE -> Icons.Default.Smartphone
+        BluetoothDeviceCategory.OTHER -> if (device.isConnected) Icons.Default.BluetoothConnected else Icons.Default.Bluetooth
+    }
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = if (device.isConnected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        border = if (device.isConnected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)) else null,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("bt_device_${device.address}"),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (device.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = device.name,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = if (device.isConnected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 13.5.sp,
+                    ),
+                    color = if (device.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = device.statusText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (device.isConnected) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (device.isConnected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Connected",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
     }
@@ -1388,13 +1855,11 @@ private fun DndDetailContent(
                                         .background(MaterialTheme.colorScheme.primary),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Text(
-                                        text = "✓",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 11.sp,
-                                        ),
-                                        color = MaterialTheme.colorScheme.onPrimary,
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(12.dp),
                                     )
                                 }
                             }

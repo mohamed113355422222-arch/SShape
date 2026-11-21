@@ -4,7 +4,11 @@
     <!-- Standard permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
@@ -14,7 +18,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -23,14 +32,35 @@
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
 
-    <!-- Package visibility for ShizukuPlus and Shizuku managers -->
+    <!-- Package visibility for Shizuku, Quick Share, and Quick Settings tiles -->
     <queries>
         <package android:name="af.shizuku.plus.api" />
         <package android:name="moe.shizuku.privileged.api" />
         <package android:name="moe.shizuku.manager" />
+        <package android:name="com.samsung.android.app.sharelive" />
+        <package android:name="com.google.android.gms" />
+        <package android:name="com.android.settings" />
+        <package android:name="com.android.systemui" />
+        <package android:name="com.google.android.apps.walletnfcrel" />
+        <package android:name="com.sec.android.app.voicenote" />
+        <package android:name="com.google.android.apps.recorder" />
+        <package android:name="com.samsung.android.oneconnect" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="com.google.android.gms.settings.NEARBY_SETTINGS" />
+        </intent>
+        <intent>
+            <action android:name="android.service.quicksettings.action.QS_TILE" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
         </intent>
     </queries>
 

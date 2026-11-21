@@ -288,6 +288,9 @@ class ShadeSettings(private val context: Context) {
         private val CSB_CUSTOM_CLOCK_COLOR_KEY = longPreferencesKey("csb_custom_clock_color")
         private val CSB_CUSTOM_ICON_COLOR_KEY = longPreferencesKey("csb_custom_icon_color")
         private val CSB_TEXT_SHADOW_KEY = booleanPreferencesKey("csb_text_shadow")
+        private val CSB_SHOW_NOTIF_ICONS_KEY = booleanPreferencesKey("csb_show_notif_icons")
+        private val CSB_MAX_NOTIF_ICONS_KEY = intPreferencesKey("csb_max_notif_icons")
+        private val CSB_INCLUDE_SILENT_NOTIFS_KEY = booleanPreferencesKey("csb_include_silent_notifs")
     }
 
     val backdropTheme: Flow<BackdropTheme> = context.dataStore.data.map { prefs ->
@@ -759,6 +762,9 @@ class ShadeSettings(private val context: Context) {
             showWifiIcon = prefs[CSB_SHOW_WIFI_KEY] ?: true,
             showMobileSignal = prefs[CSB_SHOW_SIGNAL_KEY] ?: true,
             showNetworkType = prefs[CUSTOM_STATUS_BAR_NET_TYPE_KEY] ?: true,
+            showNotificationIcons = prefs[CSB_SHOW_NOTIF_ICONS_KEY] ?: true,
+            maxNotificationIcons = (prefs[CSB_MAX_NOTIF_ICONS_KEY] ?: 3).coerceIn(1, 6),
+            includeSilentNotifications = prefs[CSB_INCLUDE_SILENT_NOTIFS_KEY] ?: false,
             showAirplaneMode = prefs[CSB_SHOW_AIRPLANE_KEY] ?: true,
             showBluetoothIcon = prefs[CSB_SHOW_BLUETOOTH_KEY] ?: true,
             showSilentIcon = prefs[CSB_SHOW_SILENT_KEY] ?: true,
@@ -822,6 +828,9 @@ class ShadeSettings(private val context: Context) {
         prefs[CSB_SHOW_WIFI_KEY] = cfg.showWifiIcon
         prefs[CSB_SHOW_SIGNAL_KEY] = cfg.showMobileSignal
         prefs[CUSTOM_STATUS_BAR_NET_TYPE_KEY] = cfg.showNetworkType
+        prefs[CSB_SHOW_NOTIF_ICONS_KEY] = cfg.showNotificationIcons
+        prefs[CSB_MAX_NOTIF_ICONS_KEY] = cfg.maxNotificationIcons.coerceIn(1, 6)
+        prefs[CSB_INCLUDE_SILENT_NOTIFS_KEY] = cfg.includeSilentNotifications
         prefs[CSB_SHOW_AIRPLANE_KEY] = cfg.showAirplaneMode
         prefs[CSB_SHOW_BLUETOOTH_KEY] = cfg.showBluetoothIcon
         prefs[CSB_SHOW_SILENT_KEY] = cfg.showSilentIcon

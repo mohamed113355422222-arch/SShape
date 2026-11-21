@@ -61,6 +61,7 @@ class SuperShadeAccessibilityService : AccessibilityService() {
 
     private var windowManager: WindowManager? = null
     private var touchCaptureView: View? = null
+    private var topSwipeHelper: com.supershade.overlay.TopSwipeGestureHelper? = null
     @Volatile private var isSuperShadeActive = false
     @Volatile private var currentSplitGestureMode = com.supershade.settings.SplitGestureMode.SEPARATE_70_30
     /** Epoch-ms of the last time SuperShade was opened via TYPE_WINDOWS_CHANGED; used to debounce false triggers. */
@@ -78,7 +79,13 @@ class SuperShadeAccessibilityService : AccessibilityService() {
             .distinctUntilChanged()
             .onEach { isOpen ->
                 customStatusBarOverlay.setSuppressedForShade(isOpen)
-                if (isOpen) shadeWindowManager.show() else shadeWindowManager.hide()
+                if (isOpen) {
+                    if (!shadeViewModel.isGestureDragging.value) {
+                        shadeWindowManager.show()
+                    }
+                } else {
+                    shadeWindowManager.hideImmediate()
+                }
             }
             .launchIn(scope)
 
@@ -170,106 +177,33 @@ class SuperShadeAccessibilityService : AccessibilityService() {
             }
         }
 
-        var startX = 0f
-        var startY = 0f
-        var triggered = false
-        var isBrightnessScrubbing = false
-        var lastBrightnessStep = -1
-        var velocityTracker: VelocityTracker? = null
-        val density = resources.displayMetrics.density
-        // Responsive pull threshold: 14dp downward motion
-        val dragThreshold = (14f * density).coerceAtLeast(20f)
+        val helper = com.supershade.overlay.TopSwipeGestureHelper(
+            context = this,
+            isShadeOpen = { shadeViewModel.state.value.isOpen },
+            splitGestureMode = { currentSplitGestureMode },
+            onBeginSwipeOpen = { expandQs ->
+                scope.launch { governor.collapse() }
+                customStatusBarOverlay.setSuppressedForShade(true)
+                shadeWindowManager.beginInteractiveShow(expandQs)
+                shadeViewModel.beginInteractiveOpen(expandQs)
+            },
+            onUpdateSwipeProgress = { progress ->
+                shadeViewModel.updateInteractiveOpen(progress)
+            },
+            onEndSwipeOpen = { shouldOpen, progress, progressVelocity ->
+                shadeViewModel.endInteractiveOpen(shouldOpen, progress, progressVelocity)
+                shadeWindowManager.finishInteractiveShow(shouldOpen)
+            },
+            onBrightnessSwipe = { brightnessLevel ->
+                scope.launch(Dispatchers.IO) {
+                    brightnessRepo.set(brightnessLevel)
+                }
+            },
+        )
+        topSwipeHelper = helper
 
         val view = View(this).apply {
-            setOnTouchListener { v, event ->
-                if (shadeViewModel.state.value.isOpen) return@setOnTouchListener false
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        startX = event.rawX
-                        startY = event.rawY
-                        triggered = false
-                        isBrightnessScrubbing = false
-                        lastBrightnessStep = -1
-                        velocityTracker?.recycle()
-                        velocityTracker = VelocityTracker.obtain().apply {
-                            addMovement(event)
-                        }
-                        val edgeExclusionPx = 10f * density
-                        val screenWidth = resources.displayMetrics.widthPixels
-                        if (startX < edgeExclusionPx || startX > (screenWidth - edgeExclusionPx)) {
-                            return@setOnTouchListener false
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        velocityTracker?.addMovement(event)
-                        val deltaX = kotlin.math.abs(event.rawX - startX)
-                        val deltaY = event.rawY - startY
-                        velocityTracker?.computeCurrentVelocity(1000)
-                        val yVelocity = velocityTracker?.yVelocity ?: 0f
-
-                        // LineageOS & Good Lock QuickStar horizontal status bar scrub for brightness
-                        val isHorizontalScrub = deltaX > (22f * density) && deltaX > (kotlin.math.abs(deltaY) * 1.75f)
-                        if (!triggered && (isBrightnessScrubbing || isHorizontalScrub)) {
-                            isBrightnessScrubbing = true
-                            val screenWidth = resources.displayMetrics.widthPixels.coerceAtLeast(1)
-                            val brightnessRatio = (event.rawX / screenWidth.toFloat()).coerceIn(0.04f, 1.0f)
-                            val brightnessLevel = (brightnessRatio * 255).toInt()
-                            val step = brightnessLevel / 20
-                            if (step != lastBrightnessStep) {
-                                lastBrightnessStep = step
-                                v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
-                            }
-                            scope.launch(Dispatchers.IO) {
-                                brightnessRepo.set(brightnessLevel)
-                            }
-                            return@setOnTouchListener true
-                        }
-
-                        val isFlingDown = !isBrightnessScrubbing && yVelocity > (750f * density) && deltaY > (8f * density) && deltaY > deltaX
-                        val isStandardPull = !isBrightnessScrubbing && deltaY > dragThreshold && deltaY > deltaX * 1.05f
-
-                        // Fluid pull trigger: downward fling or standard downward gesture (> 46 degrees)
-                        if (!triggered && (isFlingDown || isStandardPull)) {
-                            triggered = true
-                            v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
-                            val screenWidth = resources.displayMetrics.widthPixels.coerceAtLeast(1)
-                            val ratio = startX / screenWidth.toFloat()
-                            val mode = currentSplitGestureMode
-
-                            val isCutoutDeadband = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                val cutout = v.rootWindowInsets?.displayCutout
-                                val topRect = cutout?.boundingRectTop
-                                if (topRect != null && !topRect.isEmpty) {
-                                    startX >= (topRect.left - 12 * density) && startX <= (topRect.right + 12 * density)
-                                } else false
-                            } else false
-
-                            val expandQs = when {
-                                mode == com.supershade.settings.SplitGestureMode.ALWAYS_NOTIFICATIONS -> false
-                                mode == com.supershade.settings.SplitGestureMode.ALWAYS_QUICK_SETTINGS -> true
-                                mode.isTogether -> false
-                                isCutoutDeadband -> false
-                                mode == com.supershade.settings.SplitGestureMode.SEPARATE_30_70 -> ratio < 0.30f
-                                mode == com.supershade.settings.SplitGestureMode.SEPARATE_50_50 -> ratio > 0.50f
-                                mode == com.supershade.settings.SplitGestureMode.SEPARATE_70_30 -> ratio > 0.70f
-                                else -> false
-                            }
-                            openSuperShade(expandQs)
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        triggered = false
-                        isBrightnessScrubbing = false
-                        lastBrightnessStep = -1
-                        velocityTracker?.recycle()
-                        velocityTracker = null
-                        true
-                    }
-                    else -> false
-                }
-            }
+            setOnTouchListener(helper.createTouchListener())
         }
 
         touchCaptureView = view
@@ -282,6 +216,8 @@ class SuperShadeAccessibilityService : AccessibilityService() {
     }
 
     private fun detachAccessibilityTouchCapture() {
+        topSwipeHelper?.cancelActiveTracking()
+        topSwipeHelper = null
         touchCaptureView?.let { view ->
             try {
                 if (view.isAttachedToWindow) {
@@ -377,7 +313,7 @@ class SuperShadeAccessibilityService : AccessibilityService() {
             if (keyCode == KeyEvent.KEYCODE_HOME || keyCode == KeyEvent.KEYCODE_APP_SWITCH) {
                 if (event.action == KeyEvent.ACTION_UP) {
                     android.util.Log.d("SuperShadeA11y", "Home/Recents button tapped while shade open -> closing SuperShade")
-                    shadeViewModel.close()
+                    shadeWindowManager.hide()
                 }
                 return true
             }
@@ -415,7 +351,7 @@ class SuperShadeAccessibilityService : AccessibilityService() {
                 GESTURE_SWIPE_UP_AND_LEFT,
                 GESTURE_SWIPE_UP_AND_RIGHT -> {
                     android.util.Log.d("SuperShadeA11y", "Accessibility swipe-up detected while shade open -> closing SuperShade")
-                    shadeViewModel.close()
+                    shadeWindowManager.hide()
                     return true
                 }
             }

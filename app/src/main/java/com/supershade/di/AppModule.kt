@@ -26,8 +26,9 @@ val appModule = module {
     single { com.supershade.domain.notification.AdaptivePriorityLoop(androidContext()) }
     single { NotificationRepository(get()) }
     single { com.supershade.domain.system.SystemStatusRepository(androidContext()) }
-    single { com.supershade.domain.system.CustomStatusBarRepository(androidContext(), get()) }
+    single { com.supershade.domain.system.CustomStatusBarRepository(androidContext(), get(), get()) }
     single { com.supershade.domain.audio.AudioRepository(androidContext()) }
+    single { com.supershade.domain.connectivity.ConnectivityRepository(androidContext(), get()) }
     single { TileRepository(androidContext(), get(), get()) }
     single { TileToggler(androidContext(), get(), get(), get(), get()) }
     single { MediaRepository(androidContext()) }
@@ -48,6 +49,7 @@ val appModule = module {
             governor = get(),
             audioRepo = get(),
             systemStatusRepo = get(),
+            connectivityRepo = get(),
         )
     }
     single { ShadeWindowManager(androidContext(), get(), get(), get()) }
