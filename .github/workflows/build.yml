@@ -27,10 +27,22 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Decode debug keystore
+      - name: Ensure debug keystore
         run: |
           if [ ! -s debug.keystore ] && [ -s debug.keystore.base64 ]; then
-            tr -d '\r\n' < debug.keystore.base64 | base64 --decode > debug.keystore
+            tr -d '\r\n' < debug.keystore.base64 | base64 --decode > debug.keystore || rm -f debug.keystore
+          fi
+          if [ ! -s debug.keystore ]; then
+            echo "debug.keystore.base64 missing or empty; generating debug.keystore with keytool..."
+            keytool -genkeypair -noprompt \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
           ls -lh debug.keystore
 
@@ -43,14 +55,17 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: wrapper
+          gradle-version: '8.11.1'
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: |
+          if [ -f gradle/wrapper/gradle-wrapper.jar ]; then
+            chmod +x gradlew
+            ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          else
+            gradle :app:assembleDebug --no-daemon --stacktrace
+          fi
 
       - name: Verify generated APK
         run: |
@@ -66,8 +81,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SuperShade-iOS-apk-${{ github.run_number }}
-          path: |
-            SuperShade-iOS.apk
-            app/build/outputs/apk/debug/app-debug.apk
+          path: SuperShade-iOS.apk
           retention-days: 14
           if-no-files-found: error
