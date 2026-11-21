@@ -192,6 +192,7 @@ afterEvaluate {
                 new File(releaseDir, "SuperShade-iOS-StatusBar.apk"),
                 new File(rootDir, "SuperShade-iOS-StatusBar.apk"),
                 new File(rootDir, "SuperShade-iOS.apk"),
+                new File(rootDir, "app9292.apk"),
             ]
 
             targets.each { dest ->
@@ -317,15 +318,20 @@ afterEvaluate {
             println("DEX_ENTRIES=${dexEntries.join(', ')}")
             println("CONTAINS_StatusBarConfig=${hasStatusBarConfigDex} CONTAINS_CustomStatusBarSettingsSection=${hasSettingsSectionDex}")
 
-            def destApk = new File(rootDir, "SuperShade-iOS.apk")
-            def tmpApk = new File(rootDir, "SuperShade-iOS.apk.tmp")
-            java.nio.file.Files.copy(sourceApk.toPath(), tmpApk.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-            java.nio.file.Files.move(tmpApk.toPath(), destApk.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-            def destHash = sha256(destApk)
-            if (!destApk.exists() || destApk.length() != sourceApk.length() || destHash != srcHash) {
-                throw new GradleException("Copy verification failed for ${destApk.absolutePath}")
+            def destApks = [
+                new File(rootDir, "SuperShade-iOS.apk"),
+                new File(rootDir, "app9292.apk"),
+            ]
+            destApks.each { destApk ->
+                def tmpApk = new File(rootDir, "${destApk.name}.tmp")
+                java.nio.file.Files.copy(sourceApk.toPath(), tmpApk.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                java.nio.file.Files.move(tmpApk.toPath(), destApk.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                def destHash = sha256(destApk)
+                if (!destApk.exists() || destApk.length() != sourceApk.length() || destHash != srcHash) {
+                    throw new GradleException("Copy verification failed for ${destApk.absolutePath}")
+                }
+                println("DEST_APK=${destApk.absolutePath} bytes=${destApk.length()} sha256=${destHash} identical=${destHash == srcHash}")
             }
-            println("DEST_APK=${destApk.absolutePath} bytes=${destApk.length()} sha256=${destHash} identical=${destHash == srcHash}")
 
             def sdkDir = android.sdkDirectory
             def buildToolsRoot = sdkDir != null ? new File(sdkDir, "build-tools") : null
@@ -335,7 +341,7 @@ afterEvaluate {
             if (latestBt != null) {
                 def aapt2 = new File(latestBt, "aapt2")
                 if (aapt2.exists() && aapt2.canExecute()) {
-                    def proc = new ProcessBuilder(aapt2.absolutePath, "dump", "badging", destApk.absolutePath)
+                    def proc = new ProcessBuilder(aapt2.absolutePath, "dump", "badging", destApks[0].absolutePath)
                         .redirectErrorStream(true).start()
                     def out = proc.inputStream.text.readLines().take(6).join("\n")
                     def rc = proc.waitFor()
@@ -344,7 +350,7 @@ afterEvaluate {
                 }
                 def apksigner = new File(latestBt, "apksigner")
                 if (apksigner.exists() && apksigner.canExecute()) {
-                    def proc = new ProcessBuilder(apksigner.absolutePath, "verify", "--print-certs", destApk.absolutePath)
+                    def proc = new ProcessBuilder(apksigner.absolutePath, "verify", "--print-certs", destApks[0].absolutePath)
                         .redirectErrorStream(true).start()
                     def out = proc.inputStream.text.trim()
                     def rc = proc.waitFor()
